@@ -399,10 +399,11 @@ impl Iterator for Tokens<'_> {
 
             // unrecognized character
             if let Some(next_char) = next_char {
+                *source = &source[next_char.len_utf8()..];
                 let result = Some(Err(
                     ErrorKind::UnrecognizedCharacer(next_char).at(self)
                 ));
-                self.advance(next_char.len_utf8());
+                self.character += 1;
                 return result;
             }
         }

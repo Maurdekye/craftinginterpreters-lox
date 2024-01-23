@@ -13,6 +13,7 @@ use clap::Parser;
 use crate::lexer::TokenLocation;
 
 mod lexer;
+mod parser;
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
@@ -28,7 +29,7 @@ impl<E> Errors<E> {
         Self(Vec::new())
     }
 
-    pub fn push<T: Into<E>>(&mut self, error: T) {
+    pub fn push(&mut self, error: impl Into<E>) {
         self.0.push(error.into());
     }
 
@@ -47,8 +48,16 @@ impl<E: Display> Display for Errors<E> {
     }
 }
 
+impl<E, T: Default> Into<Result<T, Errors<E>>> for Errors<E> {
+    fn into(self) -> Result<T, Errors<E>> {
+        self.empty_ok(T::default())
+    }
+}
+
 impl<E: StdError> StdError for Errors<E> {}
 
+/// Interpret lox code, evaluating and printing the execution result, 
+/// and then return a list of any errors that may have been encountered
 fn run(source: String) -> Result<(), Errors<Error>> {
     let mut errors = Errors::new();
 
@@ -60,7 +69,7 @@ fn run(source: String) -> Result<(), Errors<Error>> {
     }
     println!();
 
-    errors.empty_ok(())
+    errors.into()
 }
 
 #[derive(Parser)]
