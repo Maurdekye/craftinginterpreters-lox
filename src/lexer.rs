@@ -197,7 +197,7 @@ impl Iterator for Tokens<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         'main: loop {
-            // source has been fully consumed, end iterator
+            // if source has been fully consumed, end iterator
             let Some(source) = &mut self.source else {
                 return None;
             };
@@ -250,7 +250,7 @@ impl Iterator for Tokens<'_> {
                 return Some(Ok(token.at(self)));
             }
 
-            // match comment or division
+            // match comment or slash
             if let Some('/') = next_char {
                 match next_next_char {
                     Some('/') => {
@@ -271,6 +271,10 @@ impl Iterator for Tokens<'_> {
                         while let Some(char) = source_chars.next() {
                             to_skip += char.len_utf8();
                             match char {
+                                '\n' => {
+                                    new_line += 1;
+                                    new_character = 1;
+                                }
                                 '*' => {
                                     to_skip += 1;
                                     new_character += 1;
@@ -280,10 +284,6 @@ impl Iterator for Tokens<'_> {
                                         *source = &source[to_skip..];
                                         continue 'main;
                                     }
-                                }
-                                '\n' => {
-                                    new_line += 1;
-                                    new_character = 1;
                                 }
                                 _ => {
                                     new_character += 1;
@@ -297,7 +297,7 @@ impl Iterator for Tokens<'_> {
                         ));
                     }
                     _ => {
-                        // division symbol
+                        // slash
                         let result = Some(Ok(Token::Slash.at(self)));
                         self.advance(1);
                         return result;
@@ -321,7 +321,7 @@ impl Iterator for Tokens<'_> {
                             new_character = 1;
                         }
                         '"' => {
-                            let string = String::from(&source[1..to_take]);
+                            let string = String::from(&source[1..=to_take]);
                             // +2 to skip the opening and closing quotes
                             *source = &source[to_take + 2..];
                             let result = Some(Ok(Token::String(string).at(self)));

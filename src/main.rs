@@ -23,7 +23,7 @@ fn run(source: String) -> Result<(), Error> {
 
     for token in Tokens::from(&*source) {
         match token {
-            Ok(TokenLocation { line, character, token }) => println!("[{line}:{character}] {}", token),
+            Ok(TokenLocation { token, .. }) => print!("{} ", token),
             Err(err) => errors.push(err),
         }
     }
@@ -51,6 +51,7 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    // let args = Args::parse_from(["_", "test.lox"]);
 
     match (args.file, args.source) {
         // run code inline
