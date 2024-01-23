@@ -1,6 +1,6 @@
 use std::{fmt::Display, num::ParseFloatError};
 
-use thiserror::Error;
+use thiserror::Error as ThisError;
 
 #[derive(Clone, Debug)]
 pub struct Error {
@@ -21,15 +21,15 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
-#[derive(Clone, Debug, Error)]
+#[derive(Clone, Debug, ThisError)]
 pub enum ErrorKind {
-    #[error("Unterminated string.")]
+    #[error("Unterminated string")]
     UnterminatedString,
-    #[error("Unterminated multiline comment.")]
+    #[error("Unterminated multiline comment")]
     UnterminatedMultilineComment,
-    #[error("Parsing error.")]
+    #[error("Number parsing error")]
     NumberParseError(#[from] ParseFloatError),
-    #[error("Unrecognized character: {0}.")]
+    #[error("Unrecognized character: '{0}'")]
     UnrecognizedCharacer(char),
 }
 
@@ -144,6 +144,7 @@ impl Display for Token {
             Token::True => write!(f, "true"),
             Token::Var => write!(f, "var"),
             Token::While => write!(f, "while"),
+
             Token::Eof => write!(f, ""),
         }
     }
