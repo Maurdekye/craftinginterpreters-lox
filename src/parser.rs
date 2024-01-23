@@ -1,65 +1,138 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 use crate::lexer::Token;
 
 #[derive(Clone, Debug)]
 pub enum Expression {
-    Literal(Token),
-    Grouping(Box<Expression>),
-    Equality(Token, Box<Expression>, Box<Expression>),
-    Comparison(Token, Box<Expression>, Box<Expression>),
-    Term(Token, Box<Expression>, Box<Expression>),
-    Factor(Token, Box<Expression>, Box<Expression>),
-    Unary(Token, Box<Expression>),
+    Equality(Equality),
 }
 
 impl Display for Expression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expression::Literal(literal) => literal.fmt(f),
-            Expression::Grouping(expr) => write!(f, "(group {expr})"),
-            Expression::Unary(unary, expr) => write!(f, "({unary} {expr})"),
-            Expression::Equality(operation, lhs, rhs)
-            | Expression::Comparison(operation, lhs, rhs)
-            | Expression::Term(operation, lhs, rhs)
-            | Expression::Factor(operation, lhs, rhs) => write!(f, "({operation} {lhs} {rhs})"),
+            Expression::Equality(equality) => write!(f, "{equality}"),
         }
     }
 }
 
-/* this may not be necessary?
-impl Expression {
-    pub fn accept(self, visitor: &mut impl ExpressionVisitor) {
+#[derive(Clone, Debug)]
+pub enum Equality {
+    Equality(Box<Equality>, Token, Comparison),
+    Comparison(Comparison),
+}
+
+impl Display for Equality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expression::Literal(literal) => visitor.visit_literal(literal),
-            Expression::Grouping(expr) => visitor.visit_grouping(*expr),
-            Expression::Unary(unary, expr) => visitor.visit_unary(unary, *expr),
-            Expression::Binary(lhs, binary, rhs) => visitor.visit_binary(*lhs, binary, *rhs),
+            Equality::Equality(equality, operation, comparison) => {
+                write!(f, "({operation} {equality} {comparison})")
+            }
+            Equality::Comparison(comparison) => write!(f, "{comparison}"),
         }
     }
 }
 
-pub trait ExpressionVisitor {
-    fn visit_literal(&mut self, literal: Literal);
-    fn visit_grouping(&mut self, expr: Expression);
-    fn visit_unary(&mut self, unary: Unary, expr: Expression);
-    fn visit_binary(&mut self, lhs: Expression, binary: Binary, rhs: Expression);
+#[derive(Clone, Debug)]
+pub enum Comparison {
+    Comparison(Box<Comparison>, Token, Term),
+    Term(Term),
 }
-*/
+
+impl Display for Comparison {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Comparison::Comparison(comparison, operation, term) => {
+                write!(f, "({operation} {comparison} {term})")
+            }
+            Comparison::Term(term) => write!(f, "{term}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Term {
+    Term(Box<Term>, Token, Factor),
+    Factor(Factor),
+}
+
+impl Display for Term {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Term::Term(term, operation, factor) => write!(f, "({operation} {term} {factor})"),
+            Term::Factor(factor) => write!(f, "{factor}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Factor {
+    Factor(Box<Factor>, Token, Unary),
+    Unary(Unary),
+}
+
+impl Display for Factor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Factor::Factor(factor, operation, unary) => write!(f, "({operation} {factor} {unary})"),
+            Factor::Unary(unary) => write!(f, "{unary}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Unary {
+    Unary(Token, Box<Unary>),
+    Primary(Primary),
+}
+
+impl Display for Unary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unary::Unary(operation, unary) => write!(f, "({operation} {unary})"),
+            Unary::Primary(primary) => write!(f, "{primary}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Primary {
+    Grouping(Box<Expression>),
+    Literal(Token),
+}
+
+impl Display for Primary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Primary::Grouping(expr) => write!(f, "(group {expr})"),
+            Primary::Literal(literal) => write!(f, "{literal}"),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
 
-    use super::Expression::*;
+    use super::{Comparison, Equality, Expression, Factor, Primary, Term, Unary};
     use crate::lexer::Token::*;
 
     #[test]
     fn test() {
-        let expr = Factor(
-            Star,
-            Unary(Minus, Literal(Number(123f64)).into()).into(),
-            Grouping(Literal(Number(45.67)).into()).into(),
-        );
+        let expr = Expression::Equality(Equality::Comparison(Comparison::Term(Term::Factor(
+            Factor::Factor(
+                Factor::Unary(Unary::Unary(
+                    Minus,
+                    Unary::Primary(Primary::Literal(Number(123f64))).into(),
+                ))
+                .into(),
+                Star,
+                Unary::Primary(Primary::Grouping(
+                    Expression::Equality(Equality::Comparison(Comparison::Term(Term::Factor(
+                        Factor::Unary(Unary::Primary(Primary::Literal(Number(45.67)))),
+                    ))))
+                    .into(),
+                )),
+            ),
+        ))));
 
         assert_eq!(format!("{expr}"), "(* (- 123) (group 45.67))");
     }
