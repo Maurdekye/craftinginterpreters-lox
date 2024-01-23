@@ -232,19 +232,51 @@ impl Iterator for Tokens<'_> {
 
             // match comment or division
             if let Some('/') = next_char {
-                if let Some('/') = next_next_char {
-                    // comment
-                    let until_line_end: usize = source_chars
-                        .take_while(|&c| c != '\n')
-                        .map(char::len_utf8)
-                        .sum();
-                    self.advance(until_line_end + 2); // add 2 for first two slashes
-                    self.newline();
-                    continue;
-                } else {
-                    // division symbol
-                    self.advance(1);
-                    return Some(Ok(Token::Slash));
+                match next_next_char {
+                    Some('/') => {
+                        // comment
+                        let until_line_end: usize = source_chars
+                            .take_while(|&c| c != '\n')
+                            .map(char::len_utf8)
+                            .sum();
+                        self.advance(until_line_end + 2); // add 2 for first two slashes
+                        self.newline();
+                        continue;
+                    }
+                    Some('*') => {
+                        // multiline comment
+                        let mut new_line = self.line;
+                        let mut new_character = self.character;
+                        let mut to_skip = 2;
+                        while let Some(char) = source_chars.next() {
+                            to_skip += char.len_utf8();
+                            match char {
+                                '*' => {
+                                    to_skip += 1;
+                                    new_character += 1;
+                                    if let Some('/') = source_chars.next() {
+                                        break;
+                                    }
+                                }
+                                '\n' => {
+                                    new_line += 1;
+                                    new_character = 0;
+                                }
+                                _ => {
+                                    new_character += 1;
+                                }
+                            }
+                        }
+                        self.line = new_line;
+                        self.character = new_character;
+                        *source = &source[to_skip..];
+                        continue;
+                    }
+                    _ => {
+                        // division symbol
+                        self.advance(1);
+                        return Some(Ok(Token::Slash));
+                    }
                 }
             }
 
