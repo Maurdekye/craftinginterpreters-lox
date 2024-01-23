@@ -3,26 +3,46 @@ use std::{
     path::PathBuf,
 };
 
+use lexer::Tokens;
 use thiserror::Error;
 
-use clap::Parser;
+use clap::{error, Parser};
 
 mod lexer;
 
 #[derive(Clone, Debug, Error)]
-enum Error {
-    
+pub enum Error {
+    #[error("Error from lexer: {0}")]
+    Lexer(#[from] lexer::Error),
 }
 
 fn run(source: String) -> Result<(), Error> {
-    println!("'{source}'");
+    let mut errors = Vec::new();
+
+    for token in Tokens::from(&*source) {
+        match token {
+            Ok(token) => print!("{} ", token),
+            Err(err) => errors.push(err),
+        }
+    }
+    println!();
+
+    if !errors.is_empty() {
+        println!("{} errors:", errors.len());
+        for error in errors {
+            println!("{}", error);
+        }
+    }
+
     Ok(())
 }
 
 #[derive(Parser)]
 struct Args {
+    /// Source file to read lox code from.
     file: Option<PathBuf>,
 
+    /// Directly pass lox code inline to be interpreted.
     #[clap(short, long)]
     source: Option<String>,
 }
@@ -31,19 +51,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     match (args.file, args.source) {
+        // run code inline
         (_, Some(source)) => run(source)?,
+
+        // run from source file
         (Some(file), _) => {
             let source = std::fs::read_to_string(file)?;
             run(source)?;
         }
+
+        // execute repl
         _ => loop {
             print!("> ");
             stdout().flush()?;
-            let Some(maybe_line) = stdin().lines().next() else {
+            let Some(line) = stdin().lines().next() else {
+                // ctrl+D or ctrl+Z
                 break;
             };
-            let line = maybe_line?;
-            run(line)?;
+            if let Err(err) = run(line?) {
+                // error interpreting code
+                println!("{err}");
+            }
         },
     }
 
