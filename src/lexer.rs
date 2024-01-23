@@ -23,12 +23,24 @@ impl std::error::Error for Error {}
 
 #[derive(Clone, Debug, Error)]
 pub enum ErrorKind {
-    #[error("Unterminated String.")]
+    #[error("Unterminated string.")]
     UnterminatedString,
+    #[error("Unterminated multiline comment.")]
+    UnterminatedMultilineComment,
     #[error("Parsing error.")]
     NumberParseError(#[from] ParseFloatError),
     #[error("Unrecognized character: {0}.")]
     UnrecognizedCharacer(char),
+}
+
+impl ErrorKind {
+    pub fn at(self, tokenizer: &Tokens) -> Error {
+        Error {
+            line: tokenizer.line,
+            character: tokenizer.character,
+            error: self,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +88,16 @@ pub enum Token {
     While,
 
     Eof,
+}
+
+impl Token {
+    pub fn at(self, tokenizer: &Tokens) -> TokenLocation {
+        TokenLocation {
+            line: tokenizer.line,
+            character: tokenizer.character,
+            token: self,
+        }
+    }
 }
 
 impl Display for Token {
@@ -127,6 +149,13 @@ impl Display for Token {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct TokenLocation {
+    pub line: usize,
+    pub character: usize,
+    pub token: Token,
+}
+
 #[derive(Debug)]
 pub struct Tokens<'a> {
     source: Option<&'a str>,
@@ -139,18 +168,9 @@ impl<'a> Tokens<'a> {
         Self {
             source: Some(source.into()),
             line: 1,
-            character: 0,
+            character: 1,
         }
     }
-
-    /// Advance by a certain amount, which may be a different number of
-    /// bytes as compared to unicode characters.
-    // pub fn advance_characters(&mut self, bytes: usize, characters: usize) {
-    //     if let Some(source) = &mut self.source {
-    //         *source = &source[bytes..];
-    //         self.character += characters;
-    //     }
-    // }
 
     pub fn advance(&mut self, amount: usize) {
         if let Some(source) = &mut self.source {
@@ -162,7 +182,7 @@ impl<'a> Tokens<'a> {
     pub fn newline(&mut self) {
         self.advance(1);
         self.line += 1;
-        self.character = 0;
+        self.character = 1;
     }
 }
 
@@ -173,10 +193,10 @@ impl<'a, T: Into<&'a str>> From<T> for Tokens<'a> {
 }
 
 impl Iterator for Tokens<'_> {
-    type Item = Result<Token, Error>;
+    type Item = Result<TokenLocation, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
+        'main: loop {
             // source has been fully consumed, end iterator
             let Some(source) = &mut self.source else {
                 return None;
@@ -189,7 +209,7 @@ impl Iterator for Tokens<'_> {
             // reached end of source, yield EOF
             if next_char.is_none() {
                 self.source = None;
-                return Some(Ok(Token::Eof));
+                return Some(Ok(Token::Eof.at(self)));
             }
 
             // skip whitespace
@@ -227,7 +247,7 @@ impl Iterator for Tokens<'_> {
                 _ => None,
             } {
                 self.advance(advance_by);
-                return Some(Ok(token));
+                return Some(Ok(token.at(self)));
             }
 
             // match comment or division
@@ -255,27 +275,32 @@ impl Iterator for Tokens<'_> {
                                     to_skip += 1;
                                     new_character += 1;
                                     if let Some('/') = source_chars.next() {
-                                        break;
+                                        self.line = new_line;
+                                        self.character = new_character;
+                                        *source = &source[to_skip..];
+                                        continue 'main;
                                     }
                                 }
                                 '\n' => {
                                     new_line += 1;
-                                    new_character = 0;
+                                    new_character = 1;
                                 }
                                 _ => {
                                     new_character += 1;
                                 }
                             }
                         }
-                        self.line = new_line;
-                        self.character = new_character;
-                        *source = &source[to_skip..];
-                        continue;
+
+                        // reached EOF before multiline comment terminated
+                        return Some(Err(
+                            ErrorKind::UnterminatedMultilineComment.at(self)
+                        ));
                     }
                     _ => {
                         // division symbol
+                        let result = Some(Ok(Token::Slash.at(self)));
                         self.advance(1);
-                        return Some(Ok(Token::Slash));
+                        return result;
                     }
                 }
             }
@@ -293,15 +318,16 @@ impl Iterator for Tokens<'_> {
                     match char {
                         '\n' => {
                             new_line += 1;
-                            new_character = 0;
+                            new_character = 1;
                         }
                         '"' => {
                             let string = String::from(&source[1..to_take]);
-                            self.line = new_line;
-                            self.character = new_character;
                             // +2 to skip the opening and closing quotes
                             *source = &source[to_take + 2..];
-                            return Some(Ok(Token::String(string)));
+                            let result = Some(Ok(Token::String(string).at(self)));
+                            self.line = new_line;
+                            self.character = new_character;
+                            return result;
                         }
                         _ => {
                             new_character += 1;
@@ -311,11 +337,7 @@ impl Iterator for Tokens<'_> {
                 }
 
                 // reached EOF before string terminated
-                return Some(Err(Error {
-                    line: self.line,
-                    character: self.character,
-                    error: ErrorKind::UnterminatedString,
-                }));
+                return Some(Err(ErrorKind::UnterminatedString.at(self)));
             }
 
             // match number literals
@@ -336,16 +358,12 @@ impl Iterator for Tokens<'_> {
                 }
 
                 let number_string = &source[..to_take];
+                *source = &source[to_take..];
                 let parse_result = number_string
                     .parse()
-                    .map(|float| Token::Number(float))
-                    .map_err(|err| Error {
-                        line: self.line,
-                        character: self.character,
-                        error: err.into(),
-                    });
+                    .map(|float| Token::Number(float).at(self))
+                    .map_err(|err| ErrorKind::NumberParseError(err).at(self));
                 self.character += to_take;
-                *source = &source[to_take..];
                 return Some(parse_result);
             }
 
@@ -374,19 +392,18 @@ impl Iterator for Tokens<'_> {
                     "while" => Token::While,
                     ident => Token::Identifier(ident.to_string()),
                 };
+                let result = Some(Ok(identifier.at(self)));
                 self.advance(to_take);
-                return Some(Ok(identifier));
+                return result;
             }
 
             // unrecognized character
             if let Some(next_char) = next_char {
-                let error = Error {
-                    line: self.line,
-                    character: self.character,
-                    error: ErrorKind::UnrecognizedCharacer(next_char),
-                };
+                let result = Some(Err(
+                    ErrorKind::UnrecognizedCharacer(next_char).at(self)
+                ));
                 self.advance(next_char.len_utf8());
-                return Some(Err(error));
+                return result;
             }
         }
     }

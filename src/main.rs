@@ -6,7 +6,9 @@ use std::{
 use lexer::Tokens;
 use thiserror::Error;
 
-use clap::{error, Parser};
+use clap::Parser;
+
+use crate::lexer::TokenLocation;
 
 mod lexer;
 
@@ -21,7 +23,7 @@ fn run(source: String) -> Result<(), Error> {
 
     for token in Tokens::from(&*source) {
         match token {
-            Ok(token) => print!("{} ", token),
+            Ok(TokenLocation { line, character, token }) => println!("[{line}:{character}] {}", token),
             Err(err) => errors.push(err),
         }
     }
