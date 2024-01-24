@@ -27,8 +27,10 @@ pub enum Token {
     Minus,
     Plus,
     Semicolon,
+    Colon,
     Slash,
     Star,
+    QuestionMark,
 
     Bang,
     BangEqual,
@@ -75,8 +77,10 @@ impl Display for Token {
             Token::Minus => write!(f, "-"),
             Token::Plus => write!(f, "+"),
             Token::Semicolon => write!(f, ";"),
+            Token::Colon => write!(f, ":"),
             Token::Slash => write!(f, "/"),
             Token::Star => write!(f, "*"),
+            Token::QuestionMark => write!(f, "?"),
 
             Token::Bang => write!(f, "!"),
             Token::BangEqual => write!(f, "!="),
@@ -108,7 +112,7 @@ impl Display for Token {
             Token::Var => write!(f, "var"),
             Token::While => write!(f, "while"),
 
-            Token::Eof => write!(f, ""),
+            Token::Eof => write!(f, "EOF"),
         }
     }
 }
@@ -121,16 +125,19 @@ pub struct Tokens<'a> {
 }
 
 impl<'a> Tokens<'a> {
+    const START_CHAR: usize = 0;
+
     pub fn new(source: impl Into<&'a str>) -> Self {
         Self {
             source: Some(source.into()),
             line: 1,
-            character: 1,
+            character: Self::START_CHAR,
         }
     }
 
     fn advance(&mut self, amount: usize) {
         if let Some(source) = &mut self.source {
+            let amount = amount.min(source.len());
             *source = &source[amount..];
             self.character += amount;
         }
@@ -139,7 +146,7 @@ impl<'a> Tokens<'a> {
     fn newline(&mut self) {
         self.advance(1);
         self.line += 1;
-        self.character = 1;
+        self.character = Self::START_CHAR;
     }
 
     /// Parse through the full token stream, collecting up either the final vector of tokens,
@@ -207,7 +214,9 @@ impl Iterator for Tokens<'_> {
                 (Some('-'), _) => Some((Token::Minus, 1)),
                 (Some('+'), _) => Some((Token::Plus, 1)),
                 (Some(';'), _) => Some((Token::Semicolon, 1)),
+                (Some(':'), _) => Some((Token::Colon, 1)),
                 (Some('*'), _) => Some((Token::Star, 1)),
+                (Some('?'), _) => Some((Token::QuestionMark, 1)),
                 (Some('!'), Some('=')) => Some((Token::BangEqual, 2)),
                 (Some('!'), _) => Some((Token::Bang, 1)),
                 (Some('='), Some('=')) => Some((Token::EqualEqual, 2)),
@@ -246,7 +255,7 @@ impl Iterator for Tokens<'_> {
                             match char {
                                 '\n' => {
                                     new_line += 1;
-                                    new_character = 1;
+                                    new_character = Self::START_CHAR;
                                 }
                                 '*' => {
                                     to_skip += 1;
@@ -288,7 +297,7 @@ impl Iterator for Tokens<'_> {
                     match char {
                         '\n' => {
                             new_line += 1;
-                            new_character = 1;
+                            new_character = Self::START_CHAR;
                         }
                         '"' => {
                             let string = String::from(&source[1..=to_take]);

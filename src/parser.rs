@@ -7,12 +7,16 @@ use thiserror::Error as ThisError;
 
 use crate::{
     lexer::Token::{self, *},
-    util::{Errors, Located, MaybeLocatedAt, MaybeLocated, Peekable},
+    util::{Errors, Located, MaybeLocated, MaybeLocatedAt, Peekable},
 };
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
-    #[error("Error parsing binary expression:\n{0}")]
+    #[error("Error parsing true branch of ternary expression:\n{0}")]
+    TernaryExpressionTrueBranchParse(Box<MaybeLocated<Error>>),
+    #[error("Error parsing false branch of ternary expression:\n{0}")]
+    TernaryExpressionFalseBranchParse(Box<MaybeLocated<Error>>),
+    #[error("Error parsing right hand side of binary expression:\n{0}")]
     BinaryExpressionParse(Box<MaybeLocated<Error>>),
     #[error("Error parsing unary expression:\n{0}")]
     UnaryExpressionParse(Box<MaybeLocated<Error>>),
@@ -22,6 +26,12 @@ pub enum Error {
     UnclosedOpeningParen(usize, usize),
     #[error("Unexpected token: '{0}'")]
     UnexpectedToken(Token),
+    #[error("Unexpected binary operator without expression: '{0}'")]
+    UnexpectedBinaryOperator(Token),
+    #[error("Unexpected ternary operator without expression: '{0}'")]
+    UnexpectedTernaryOperator(Token),
+    #[error("Missing ':' in ternary expression")]
+    MissingTernaryColon,
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +40,7 @@ pub enum Expression {
     Grouping(Box<Expression>),
     Unary(Located<Token>, Box<Expression>),
     Binary(Located<Token>, Box<Expression>, Box<Expression>),
+    Ternary(Box<Expression>, Box<Expression>, Box<Expression>),
 }
 
 impl Display for Expression {
@@ -40,6 +51,9 @@ impl Display for Expression {
             Expression::Unary(Located { item: token, .. }, expr) => write!(f, "({token} {expr})"),
             Expression::Binary(Located { item: token, .. }, lhs, rhs) => {
                 write!(f, "({token} {lhs} {rhs})")
+            }
+            Expression::Ternary(cond, true_expr, false_expr) => {
+                write!(f, "(? {cond} {true_expr} {false_expr})")
             }
         }
     }
@@ -54,6 +68,35 @@ pub fn parse(
 
 type ExpressionParseResult = Result<Expression, MaybeLocated<Error>>;
 
+fn expression(
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+) -> ExpressionParseResult {
+    ternary(tokens)
+}
+
+fn ternary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {
+    if let Some(operator) =
+        tokens.next_if(|token: &Located<Token>| matches!(token.item, QuestionMark | Colon))
+    {
+        return Err(Error::UnexpectedTernaryOperator(operator.item.clone()).located_at(&operator));
+    }
+    let mut expression = binary(tokens)?;
+    while let Some(operator) = tokens.next_if(|token| matches!(token.item, QuestionMark)) {
+        let true_expr = binary(tokens).map_err(|err| {
+            Error::TernaryExpressionTrueBranchParse(err.into()).located_at(&operator)
+        })?;
+        let colon_token = tokens.next();
+        let Some(Located { item: Colon, .. }) = colon_token else {
+            return Err(Error::MissingTernaryColon.located_if(colon_token.as_ref()));
+        };
+        let false_expr = binary(tokens).map_err(|err| {
+            Error::TernaryExpressionFalseBranchParse(err.into()).located_if(colon_token.as_ref())
+        })?;
+        expression = Expression::Ternary(expression.into(), true_expr.into(), false_expr.into());
+    }
+    Ok(expression)
+}
+
 fn binary_parse<F, I>(
     tokens: &mut Peekable<I>,
     operator_pred: impl Fn(&Token) -> bool,
@@ -63,6 +106,11 @@ where
     I: Iterator<Item = Located<Token>>,
     F: FnMut(&mut Peekable<I>) -> ExpressionParseResult,
 {
+    if let Some(operator) =
+        tokens.next_if(|token| operator_pred(&token.item) && !matches!(token.item, Minus))
+    {
+        return Err(Error::UnexpectedBinaryOperator(operator.item.clone()).located_at(&operator));
+    }
     let mut expression = sub_parser(tokens)?;
     while let Some(operator) = tokens.next_if(|token| operator_pred(&token.item)) {
         let rhs_expression = sub_parser(tokens)
@@ -72,9 +120,7 @@ where
     Ok(expression)
 }
 
-fn expression(
-    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
-) -> ExpressionParseResult {
+fn binary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {
     binary_parse(
         tokens,
         |t| matches!(t, EqualEqual | BangEqual),
