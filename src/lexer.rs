@@ -2,7 +2,7 @@ use std::{fmt::Display, iter::once, num::ParseFloatError};
 
 use thiserror::Error as ThisError;
 
-use crate::{util::Peekable, Errors, Locateable, Located, LocatedAt};
+use crate::util::{Errors, Locateable, Located, LocatedAt, Peekable};
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
@@ -142,21 +142,18 @@ impl<'a> Tokens<'a> {
         self.character = 1;
     }
 
-    /// Parse through the full token stream, collecting up either the final vector of tokens, 
+    /// Parse through the full token stream, collecting up either the final vector of tokens,
     /// or the set of errors produced by the lexer if any.
+    #[allow(unused)]
     pub fn consolidate(mut self) -> Result<Vec<Located<Token>>, Errors<Located<Error>>> {
         let mut tokens = Vec::new();
         loop {
             match self.next() {
                 Some(Ok(token)) => tokens.push(token),
                 Some(Err(err)) => {
-                    return Err(Errors(
-                        once(err)
-                            .chain(self.filter_map(Result::err))
-                            .collect(),
-                    ))
+                    return Err(once(err).chain(self.filter_map(Result::err)).collect())
                 }
-                None => return Ok(tokens)
+                None => return Ok(tokens),
             }
         }
     }

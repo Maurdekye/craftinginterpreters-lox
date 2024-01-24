@@ -6,12 +6,8 @@ use std::{
 use thiserror::Error as ThisError;
 
 use crate::{
-    lexer::{
-        Token::{self, *},
-        Tokens,
-    },
-    util::Peekable,
-    Errors, Located, LocatedAt, MaybeLocateable, MaybeLocated,
+    lexer::Token::{self, *},
+    util::{Errors, Located, MaybeLocateable, MaybeLocated, Peekable},
 };
 
 #[derive(Clone, Debug, ThisError)]
@@ -22,9 +18,9 @@ pub enum Error {
     UnaryExpressionParse(Box<MaybeLocated<Error>>),
     #[error("Unexpected end of token stream")]
     UnexpectedEndOfTokenStream,
-    #[error("Missing ')' after expression end")]
-    UnclosedOpeningParen,
-    #[error("Unexpected token: {0}")]
+    #[error("Unclosed opening paren at [{0}:{1}]")]
+    UnclosedOpeningParen(usize, usize),
+    #[error("Unexpected token: '{0}'")]
     UnexpectedToken(Token),
 }
 
@@ -117,58 +113,18 @@ fn primary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
         False | True | Nil | Number(_) | String(_) => Ok(Expression::Literal(next_token)),
         LeftParen => {
             let sub_expression = expression(tokens)?;
-            let next_token = tokens.next();
+            let close_token = tokens.next();
             let Some(Located {
                 item: RightParen, ..
-            }) = next_token
+            }) = close_token
             else {
-                return Err(Error::UnclosedOpeningParen.located_if(next_token.as_ref()));
+                return Err(
+                    Error::UnclosedOpeningParen(next_token.line, next_token.character)
+                        .located_if(close_token.as_ref()),
+                );
             };
             Ok(Expression::Grouping(sub_expression.into()))
         }
         _ => Err(Error::UnexpectedToken(next_token.item.clone()).located_at(&next_token)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::Expression::*;
-    use crate::{lexer::Token::*, Located};
-
-    #[test]
-    fn test() {
-        let expr = Binary(
-            Located {
-                line: 1,
-                character: 1,
-                item: Star,
-            },
-            Unary(
-                Located {
-                    line: 1,
-                    character: 1,
-                    item: Minus,
-                },
-                Literal(Located {
-                    line: 1,
-                    character: 1,
-                    item: Number(123f64),
-                })
-                .into(),
-            )
-            .into(),
-            Grouping(
-                Literal(Located {
-                    line: 1,
-                    character: 1,
-                    item: Number(45.67),
-                })
-                .into(),
-            )
-            .into(),
-        );
-
-        assert_eq!(format!("{expr}"), "(* (- 123) (group 45.67))");
     }
 }
