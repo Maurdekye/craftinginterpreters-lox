@@ -11,7 +11,7 @@ use crate::{
         Tokens,
     },
     util::Peekable,
-    Errors, Located, LocatedAt,
+    Errors, Located, LocatedAt, MaybeLocateable, MaybeLocated,
 };
 
 #[derive(Clone, Debug, ThisError)]
@@ -26,21 +26,6 @@ pub enum Error {
     UnclosedOpeningParen,
     #[error("Unexpected token: {0}")]
     UnexpectedToken(Token),
-}
-
-#[derive(Clone, Debug, ThisError)]
-pub enum MaybeLocated<T> {
-    Located(Located<T>),
-    Unlocated(T),
-}
-
-impl<T: Display> Display for MaybeLocated<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MaybeLocated::Located(located) => write!(f, "{located}"),
-            MaybeLocated::Unlocated(unlocated) => write!(f, "{unlocated}"),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -84,9 +69,8 @@ where
 {
     let mut expression = sub_parser(tokens)?;
     while let Some(operator) = tokens.next_if(|token| operator_pred(&token.item)) {
-        let rhs_expression = sub_parser(tokens).map_err(|err| {
-            MaybeLocated::Located(Error::BinaryExpressionParse(err.into()).at(&operator))
-        })?;
+        let rhs_expression = sub_parser(tokens)
+            .map_err(|err| Error::BinaryExpressionParse(err.into()).located_at(&operator))?;
         expression = Expression::Binary(operator, expression.into(), rhs_expression.into());
     }
     Ok(expression)
@@ -116,9 +100,8 @@ fn expression(
 
 fn unary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {
     if let Some(operator) = tokens.next_if(|token| matches!(token.item, Bang | Minus)) {
-        let rhs = unary(tokens).map_err(|err| {
-            MaybeLocated::Located(Error::UnaryExpressionParse(err.into()).at(&operator))
-        })?;
+        let rhs = unary(tokens)
+            .map_err(|err| Error::UnaryExpressionParse(err.into()).located_at(&operator))?;
         Ok(Expression::Unary(operator, rhs.into()))
     } else {
         primary(tokens)
@@ -127,7 +110,7 @@ fn unary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Express
 
 fn primary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {
     let Some(next_token) = tokens.next() else {
-        return Err(MaybeLocated::Unlocated(Error::UnexpectedEndOfTokenStream));
+        return Err(Error::UnexpectedEndOfTokenStream.unlocated());
     };
 
     match next_token.item {
@@ -139,16 +122,11 @@ fn primary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
                 item: RightParen, ..
             }) = next_token
             else {
-                return Err(next_token.map_or(
-                    MaybeLocated::Unlocated(Error::UnclosedOpeningParen),
-                    |next_token| MaybeLocated::Located(Error::UnclosedOpeningParen.at(&next_token)),
-                ));
+                return Err(Error::UnclosedOpeningParen.located_if(next_token.as_ref()));
             };
             Ok(Expression::Grouping(sub_expression.into()))
         }
-        _ => Err(MaybeLocated::Located(
-            Error::UnexpectedToken(next_token.item.clone()).at(&next_token),
-        )),
+        _ => Err(Error::UnexpectedToken(next_token.item.clone()).located_at(&next_token)),
     }
 }
 

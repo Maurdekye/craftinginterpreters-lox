@@ -8,7 +8,6 @@ use std::{
 };
 
 use lexer::Tokens;
-use parser::MaybeLocated;
 use thiserror::Error as ThisError;
 
 use clap::Parser;
@@ -66,6 +65,40 @@ pub trait LocatedAt<T: Locateable>: Sized {
 }
 
 impl<L: Locateable, T> LocatedAt<L> for T {}
+
+#[derive(Clone, Debug, ThisError)]
+pub enum MaybeLocated<T> {
+    Located(Located<T>),
+    Unlocated(T),
+}
+
+impl<T: Display> Display for MaybeLocated<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MaybeLocated::Located(located) => write!(f, "{located}"),
+            MaybeLocated::Unlocated(unlocated) => write!(f, "{unlocated}"),
+        }
+    }
+}
+
+pub trait MaybeLocateable: Sized {
+    fn unlocated(self) -> MaybeLocated<Self> {
+        MaybeLocated::Unlocated(self)
+    }
+
+    fn located_at(self, locateable: &impl Locateable) -> MaybeLocated<Self> {
+        MaybeLocated::Located(self.at(locateable))
+    }
+
+    fn located_if(self, some_locateable: Option<&impl Locateable>) -> MaybeLocated<Self> {
+        match some_locateable {
+            Some(locateable) => self.located_at(locateable),
+            None => self.unlocated(),
+        }
+    }
+}
+
+impl<T> MaybeLocateable for T {}
 
 #[derive(Clone, Debug)]
 pub struct Errors<E>(Vec<E>);
