@@ -12,6 +12,7 @@ use clap::Parser;
 
 use crate::lexer::TokenLocation;
 
+mod util;
 mod lexer;
 mod parser;
 

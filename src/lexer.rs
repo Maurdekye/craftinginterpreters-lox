@@ -2,6 +2,8 @@ use std::{fmt::Display, num::ParseFloatError};
 
 use thiserror::Error as ThisError;
 
+use crate::util::Peekable;
+
 #[derive(Clone, Debug)]
 pub struct Error {
     line: usize,
@@ -204,29 +206,28 @@ impl Iterator for Tokens<'_> {
             };
 
             // start by peeking the next two characters
-            let mut source_chars = source.chars();
-            let (next_char, next_next_char) = (source_chars.next(), source_chars.next());
+            let mut chars = Peekable::new_double(source.chars());
 
             // reached end of source, yield EOF
-            if next_char.is_none() {
+            if chars.peek().is_none() {
                 self.source = None;
                 return Some(Ok(Token::Eof.at(self)));
             }
 
             // skip whitespace
-            if let Some(' ' | '\r' | '\t') = next_char {
+            if let Some(' ' | '\r' | '\t') = chars.peek() {
                 self.advance(1);
                 continue;
             }
 
             // match newline
-            if let Some('\n') = next_char {
+            if let Some('\n') = chars.peek() {
                 self.newline();
                 continue;
             }
 
             // match single and dual-character tokens
-            if let Some((token, advance_by)) = match (next_char, next_next_char) {
+            if let Some((token, advance_by)) = match (chars.peek(), chars.peek_second()) {
                 (Some('('), _) => Some((Token::LeftParen, 1)),
                 (Some(')'), _) => Some((Token::RightParen, 1)),
                 (Some('{'), _) => Some((Token::LeftBrace, 1)),
@@ -252,15 +253,15 @@ impl Iterator for Tokens<'_> {
             }
 
             // match comment or slash
-            if let Some('/') = next_char {
-                match next_next_char {
+            if let Some('/') = chars.peek() {
+                match chars.peek_second() {
                     Some('/') => {
                         // comment
-                        let until_line_end: usize = source_chars
+                        let until_line_end: usize = chars
                             .take_while(|&c| c != '\n')
                             .map(char::len_utf8)
                             .sum();
-                        self.advance(until_line_end + 2); // add 2 for first two slashes
+                        self.advance(until_line_end);
                         self.newline();
                         continue;
                     }
@@ -269,7 +270,10 @@ impl Iterator for Tokens<'_> {
                         let mut new_line = self.line;
                         let mut new_character = self.character;
                         let mut to_skip = 2;
-                        while let Some(char) = source_chars.next() {
+                        // skip beginning of comment
+                        chars.next();
+                        chars.next();
+                        while let Some(char) = chars.next() {
                             to_skip += char.len_utf8();
                             match char {
                                 '\n' => {
@@ -279,7 +283,7 @@ impl Iterator for Tokens<'_> {
                                 '*' => {
                                     to_skip += 1;
                                     new_character += 1;
-                                    if let Some('/') = source_chars.next() {
+                                    if let Some('/') = chars.next() {
                                         self.line = new_line;
                                         self.character = new_character;
                                         *source = &source[to_skip..];
@@ -307,15 +311,14 @@ impl Iterator for Tokens<'_> {
             }
 
             // match string literals
-            if let Some('"') = next_char {
-                let mut source_chars = source.chars();
+            if let Some('"') = chars.peek() {
                 // skip opening quote
-                source_chars.next();
+                chars.next();
                 let mut new_line = self.line;
                 let mut new_character = self.character;
                 let mut to_take = 0;
 
-                for char in source_chars {
+                for char in chars {
                     match char {
                         '\n' => {
                             new_line += 1;
@@ -342,7 +345,7 @@ impl Iterator for Tokens<'_> {
             }
 
             // match number literals
-            if let Some('0'..='9') = next_char {
+            if let Some('0'..='9') = chars.peek() {
                 let mut source_chars = source.chars();
                 let mut to_take = 0;
 
@@ -369,9 +372,8 @@ impl Iterator for Tokens<'_> {
             }
 
             // match identifiers & keywords
-            if let Some('a'..='z' | 'A'..='Z' | '_') = next_char {
-                let to_take = source
-                    .chars()
+            if let Some('a'..='z' | 'A'..='Z' | '_') = chars.peek() {
+                let to_take = chars
                     .take_while(|c| matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_'))
                     .count();
                 let identifier = match &source[..to_take] {
@@ -399,10 +401,10 @@ impl Iterator for Tokens<'_> {
             }
 
             // unrecognized character
-            if let Some(next_char) = next_char {
+            if let Some(next_char) = chars.peek() {
                 *source = &source[next_char.len_utf8()..];
                 let result = Some(Err(
-                    ErrorKind::UnrecognizedCharacer(next_char).at(self)
+                    ErrorKind::UnrecognizedCharacer(*next_char).at(self)
                 ));
                 self.character += 1;
                 return result;
