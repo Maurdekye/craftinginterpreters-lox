@@ -79,8 +79,8 @@ impl<T> Locateable for Located<T> {
     }
 }
 
-pub trait LocatedAt<T: Locateable>: Sized {
-    fn at(self, locator: &T) -> Located<Self> {
+pub trait LocatedAt: Sized {
+    fn at(self, locator: &impl Locateable) -> Located<Self> {
         Located {
             line: locator.line(),
             character: locator.character(),
@@ -89,7 +89,7 @@ pub trait LocatedAt<T: Locateable>: Sized {
     }
 }
 
-impl<L: Locateable, T> LocatedAt<L> for T {}
+impl<T> LocatedAt for T {}
 
 #[derive(Clone, Debug)]
 pub enum MaybeLocated<T> {
@@ -108,7 +108,7 @@ impl<T: Display> Display for MaybeLocated<T> {
 
 impl<T: StdError> StdError for MaybeLocated<T> {}
 
-pub trait MaybeLocateable: Sized {
+pub trait MaybeLocatedAt: Sized {
     fn unlocated(self) -> MaybeLocated<Self> {
         MaybeLocated::Unlocated(self)
     }
@@ -125,7 +125,7 @@ pub trait MaybeLocateable: Sized {
     }
 }
 
-impl<T> MaybeLocateable for T {}
+impl<T> MaybeLocatedAt for T {}
 
 #[derive(Clone, Debug)]
 pub struct Errors<E>(Vec<E>);
@@ -159,9 +159,9 @@ impl<E> From<Vec<E>> for Errors<E> {
     }
 }
 
-impl<E> FromIterator<E> for Errors<E> {
-    fn from_iter<T: IntoIterator<Item = E>>(iter: T) -> Self {
-        Errors(iter.into_iter().collect())
+impl<E, U: Into<E>> FromIterator<U> for Errors<E> {
+    fn from_iter<T: IntoIterator<Item = U>>(iter: T) -> Self {
+        Errors(iter.into_iter().map(Into::<E>::into).collect())
     }
 }
 
@@ -179,13 +179,6 @@ impl<E, U: Into<E>> Extend<U> for Errors<E> {
         self.0.extend(iter.into_iter().map(Into::<E>::into));
     }
 }
-
-// doesnt work :(
-// impl<E, O: From<E>> From<Errors<E>> for Errors<O> {
-//     fn from(value: Errors<E>) -> Self {
-//         value.map(From::from)
-//     }
-// }
 
 impl<E: Display> Display for Errors<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

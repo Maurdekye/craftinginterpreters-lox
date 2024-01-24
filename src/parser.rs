@@ -7,7 +7,7 @@ use thiserror::Error as ThisError;
 
 use crate::{
     lexer::Token::{self, *},
-    util::{Errors, Located, MaybeLocateable, MaybeLocated, Peekable},
+    util::{Errors, Located, MaybeLocatedAt, MaybeLocated, Peekable},
 };
 
 #[derive(Clone, Debug, ThisError)]
