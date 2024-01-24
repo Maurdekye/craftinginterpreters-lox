@@ -1,8 +1,8 @@
-use std::{fmt::Display, num::ParseFloatError};
+use std::{fmt::Display, iter::once, num::ParseFloatError};
 
 use thiserror::Error as ThisError;
 
-use crate::{util::Peekable, Locateable, Located, LocatedAt};
+use crate::{util::Peekable, Errors, Locateable, Located, LocatedAt};
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
@@ -62,7 +62,6 @@ pub enum Token {
 
     Eof,
 }
-
 
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -130,17 +129,36 @@ impl<'a> Tokens<'a> {
         }
     }
 
-    pub fn advance(&mut self, amount: usize) {
+    fn advance(&mut self, amount: usize) {
         if let Some(source) = &mut self.source {
             *source = &source[amount..];
             self.character += amount;
         }
     }
 
-    pub fn newline(&mut self) {
+    fn newline(&mut self) {
         self.advance(1);
         self.line += 1;
         self.character = 1;
+    }
+
+    /// Parse through the full token stream, collecting up either the final vector of tokens, 
+    /// or the set of errors produced by the lexer if any.
+    pub fn consolidate(mut self) -> Result<Vec<Located<Token>>, Errors<Located<Error>>> {
+        let mut tokens = Vec::new();
+        loop {
+            match self.next() {
+                Some(Ok(token)) => tokens.push(token),
+                Some(Err(err)) => {
+                    return Err(Errors(
+                        once(err)
+                            .chain(self.filter_map(Result::err))
+                            .collect(),
+                    ))
+                }
+                None => return Ok(tokens)
+            }
+        }
     }
 }
 
@@ -369,6 +387,3 @@ impl Locateable for Tokens<'_> {
         self.character
     }
 }
-
-impl LocatedAt<Tokens<'_>> for Token {}
-impl LocatedAt<Tokens<'_>> for Error {}

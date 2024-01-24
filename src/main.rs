@@ -1,22 +1,27 @@
 use std::{
-    error::Error as StdError, fmt::Display, io::{stdin, stdout, Write}, panic::Location, path::PathBuf
+    error::Error as StdError,
+    fmt::Display,
+    io::{stdin, stdout, Write},
+    iter,
+    path::PathBuf,
 };
 
 use lexer::Tokens;
+use parser::MaybeLocated;
 use thiserror::Error as ThisError;
 
 use clap::Parser;
 
-mod util;
 mod lexer;
 mod parser;
+mod util;
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
     #[error("Lexer error: {0}")]
     Lexer(#[from] Located<lexer::Error>),
     #[error("Parser error: {0}")]
-    Parser(#[from] Located<parser::Error>),
+    Parser(#[from] MaybeLocated<parser::Error>),
 }
 
 #[derive(Clone, Debug)]
@@ -59,8 +64,10 @@ pub trait LocatedAt<T: Locateable>: Sized {
     }
 }
 
+impl<L: Locateable, T> LocatedAt<L> for T {}
+
 #[derive(Clone, Debug)]
-pub struct Errors<E>(pub Vec<E>);
+pub struct Errors<E>(Vec<E>);
 
 impl<E> Errors<E> {
     pub fn new() -> Self {
@@ -75,7 +82,33 @@ impl<E> Errors<E> {
     pub fn empty_ok<T>(self, ok: T) -> Result<T, Self> {
         self.0.is_empty().then_some(ok).ok_or(self)
     }
+
+    pub fn map<F, O>(self, f: F) -> Errors<O>
+    where
+        F: FnMut(E) -> O,
+    {
+        Errors(self.0.into_iter().map(f).collect())
+    }
 }
+
+impl<E> From<Vec<E>> for Errors<E> {
+    fn from(value: Vec<E>) -> Self {
+        Errors(value)
+    }
+}
+
+impl<E> FromIterator<E> for Errors<E> {
+    fn from_iter<T: IntoIterator<Item = E>>(iter: T) -> Self {
+        Errors(iter.into_iter().collect())
+    }
+}
+
+// doesnt work :(
+// impl<E, O: From<E>> From<Errors<E>> for Errors<O> {
+//     fn from(value: Errors<E>) -> Self {
+//         value.map(From::from)
+//     }
+// }
 
 impl<E: Display> Display for Errors<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -94,20 +127,20 @@ impl<E, T: Default> Into<Result<T, Errors<E>>> for Errors<E> {
 
 impl<E: StdError> StdError for Errors<E> {}
 
-/// Interpret lox code, evaluating and printing the execution result, 
+/// Interpret lox code, evaluating and printing the execution result,
 /// and then return a list of any errors that may have been encountered
 fn run(source: String) -> Result<(), Errors<Error>> {
-    let mut errors = Errors::new();
-
-    for token in Tokens::from(&*source) {
-        match token {
-            Ok(Located { item: token, .. }) => print!("{} ", token),
-            Err(err) => errors.push(err),
+    let mut dirty_tokens = Tokens::from(&*source);
+    let clean_tokens = iter::from_fn(|| loop {
+        match dirty_tokens.next() {
+            Some(Err(err)) => println!("{err}"),
+            Some(Ok(token)) => return Some(token),
+            None => return None,
         }
-    }
-    println!();
-
-    errors.into()
+    });
+    let source = parser::parse(clean_tokens).map_err(|e| e.map(Error::from))?;
+    println!("{source}");
+    Ok(())
 }
 
 #[derive(Parser)]
