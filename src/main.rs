@@ -27,15 +27,14 @@ pub enum Error {
 /// and then return a list of any errors that may have been encountered
 fn run(source: String) -> Result<(), Errors<Error>> {
     let mut errors = Errors::new();
-    let mut dirty_tokens = Tokens::from(&*source);
-    let clean_tokens = iter::from_fn(|| loop {
-        match dirty_tokens.next() {
+    let mut tokens = Tokens::from(&*source);
+    let source = match parser::parse(iter::from_fn(|| loop {
+        match tokens.next() {
             Some(Err(err)) => errors.push(err),
             Some(Ok(token)) => return Some(token),
             None => return None,
         }
-    });
-    let source = match parser::parse(clean_tokens) {
+    })) {
         Ok(source) => source,
         Err(errs) => {
             errors.extend(errs);
