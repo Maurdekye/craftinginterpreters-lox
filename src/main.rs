@@ -11,6 +11,9 @@ use thiserror::Error as ThisError;
 use clap::Parser;
 use util::{Errors, Located, MaybeLocated};
 
+use crate::util::ErrorsInto;
+
+mod interpreter;
 mod lexer;
 mod parser;
 mod util;
@@ -21,27 +24,35 @@ pub enum Error {
     Lexer(#[from] Located<lexer::Error>),
     #[error("Parser error:\n{0}")]
     Parser(#[from] MaybeLocated<parser::Error>),
+    #[error("Interpreter error:\n{0}")]
+    Interpreter(#[from] MaybeLocated<interpreter::Error>),
+}
+
+impl From<Errors<MaybeLocated<parser::Error>>> for Errors<Error> {
+    fn from(value: Errors<MaybeLocated<parser::Error>>) -> Self {
+        value.map(From::from)
+    }
 }
 
 /// Interpret lox code, evaluating and printing the execution result,
 /// and then return a list of any errors that may have been encountered
 fn run(source: String) -> Result<(), Errors<Error>> {
-    let mut errors = Errors::new();
-    let mut tokens = Tokens::from(&*source);
-    let source = match parser::parse(iter::from_fn(|| loop {
-        match tokens.next() {
+    let mut errors: Errors<Error> = Errors::new();
+    let mut raw_tokens = Tokens::from(&*source);
+    let tokens = iter::from_fn(|| loop {
+        match raw_tokens.next() {
             Some(Err(err)) => errors.push(err),
             Some(Ok(token)) => return Some(token),
             None => return None,
         }
-    })) {
-        Ok(source) => source,
-        Err(errs) => {
-            errors.extend(errs);
-            return Err(errors);
-        }
+    });
+    let Some(expression) = parser::parse(tokens).errors_into(&mut errors) else {
+        return Err(errors);
     };
-    println!("{source}");
+    let Some(result) = interpreter::interpret(expression).errors_into(&mut errors) else {
+        return Err(errors);
+    };
+    println!("{result}");
     errors.empty_ok(())
 }
 

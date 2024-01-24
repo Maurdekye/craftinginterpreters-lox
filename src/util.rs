@@ -50,6 +50,31 @@ impl<I: Iterator> Iterator for Peekable<I> {
 }
 
 #[derive(Clone, Debug)]
+pub struct Location {
+    pub line: usize,
+    pub character: usize,
+}
+
+impl Locateable for Location {
+    fn line(&self) -> usize {
+        self.line
+    }
+
+    fn character(&self) -> usize {
+        self.character
+    }
+}
+
+impl<L: Locateable> From<&L> for Location {
+    fn from(value: &L) -> Self {
+        Location {
+            line: value.line(),
+            character: value.character(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Located<T> {
     pub line: usize,
     pub character: usize,
@@ -150,6 +175,24 @@ impl<E> Errors<E> {
         F: FnMut(E) -> O,
     {
         Errors(self.0.into_iter().map(f).collect())
+    }
+}
+
+pub trait ErrorsInto<E, T> {
+    /// Extract the errors from a result and push them into an
+    /// Errors collection, then transform the result into an Option
+    fn errors_into(self, errors: &mut Errors<E>) -> Option<T>;
+}
+
+impl<E, U: Into<E>, T> ErrorsInto<E, T> for Result<T, Errors<U>> {
+    fn errors_into(self, errors: &mut Errors<E>) -> Option<T> {
+        match self {
+            Ok(value) => Some(value),
+            Err(new_errors) => {
+                errors.extend(new_errors);
+                None
+            }
+        }
     }
 }
 

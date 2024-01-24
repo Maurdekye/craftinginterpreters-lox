@@ -97,30 +97,31 @@ fn ternary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
     Ok(expression)
 }
 
-fn binary_parse<F, I>(
-    tokens: &mut Peekable<I>,
-    operator_pred: impl Fn(&Token) -> bool,
-    mut sub_parser: F,
-) -> ExpressionParseResult
-where
-    I: Iterator<Item = Located<Token>>,
-    F: FnMut(&mut Peekable<I>) -> ExpressionParseResult,
-{
-    if let Some(operator) =
-        tokens.next_if(|token| operator_pred(&token.item) && !matches!(token.item, Minus))
-    {
-        return Err(Error::UnexpectedBinaryOperator(operator.item.clone()).located_at(&operator));
-    }
-    let mut expression = sub_parser(tokens)?;
-    while let Some(operator) = tokens.next_if(|token| operator_pred(&token.item)) {
-        let rhs_expression = sub_parser(tokens)
-            .map_err(|err| Error::BinaryExpressionParse(err.into()).located_at(&operator))?;
-        expression = Expression::Binary(operator, expression.into(), rhs_expression.into());
-    }
-    Ok(expression)
-}
-
 fn binary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {
+    fn binary_parse<F, I>(
+        tokens: &mut Peekable<I>,
+        operator_pred: impl Fn(&Token) -> bool,
+        mut sub_parser: F,
+    ) -> ExpressionParseResult
+    where
+        I: Iterator<Item = Located<Token>>,
+        F: FnMut(&mut Peekable<I>) -> ExpressionParseResult,
+    {
+        if let Some(operator) =
+            tokens.next_if(|token| operator_pred(&token.item) && !matches!(token.item, Minus))
+        {
+            return Err(
+                Error::UnexpectedBinaryOperator(operator.item.clone()).located_at(&operator)
+            );
+        }
+        let mut expression = sub_parser(tokens)?;
+        while let Some(operator) = tokens.next_if(|token| operator_pred(&token.item)) {
+            let rhs_expression = sub_parser(tokens)
+                .map_err(|err| Error::BinaryExpressionParse(err.into()).located_at(&operator))?;
+            expression = Expression::Binary(operator, expression.into(), rhs_expression.into());
+        }
+        Ok(expression)
+    }
     binary_parse(
         tokens,
         |t| matches!(t, EqualEqual | BangEqual),
