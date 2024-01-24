@@ -1,46 +1,66 @@
-use std::{
-    fmt::{Debug, Display},
-    path::Iter,
-};
+use std::fmt::{Debug, Display};
+
+use thiserror::Error as ThisError;
 
 use crate::{
-    lexer::{Token, TokenLocation, Tokens},
+    lexer::{Token, Tokens},
     util::Peekable,
+    Errors, Located, LocatedAt,
 };
+
+#[derive(Clone, Debug, ThisError)]
+pub enum Error {}
+
+impl LocatedAt<Located<Token>> for Error {}
 
 #[derive(Clone, Debug)]
 pub enum Expression {
-    Literal(TokenLocation),
+    Literal(Located<Token>),
     Grouping(Box<Expression>),
-    Unary(TokenLocation, Box<Expression>),
-    Binary(TokenLocation, Box<Expression>, Box<Expression>),
+    Unary(Located<Token>, Box<Expression>),
+    Binary(Located<Token>, Box<Expression>, Box<Expression>),
 }
 
 impl Display for Expression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expression::Literal(TokenLocation { token, .. }) => write!(f, "{token}"),
+            Expression::Literal(Located { item: token, .. }) => write!(f, "{token}"),
             Expression::Grouping(expr) => write!(f, "(group {expr})"),
-            Expression::Unary(TokenLocation { token, .. }, expr) => write!(f, "({token} {expr})"),
-            Expression::Binary(TokenLocation { token, .. }, lhs, rhs) => {
+            Expression::Unary(Located { item: token, .. }, expr) => write!(f, "({token} {expr})"),
+            Expression::Binary(Located { item: token, .. }, lhs, rhs) => {
                 write!(f, "({token} {lhs} {rhs})")
             }
         }
     }
 }
 
-pub fn parse(tokens: Tokens<'_>) -> Expression {
+type TokenIter<'a> = Peekable<Peekable<Tokens<'a>>>;
+type ParseResult = Result<Expression, Errors<Located<Error>>>;
+
+pub fn parse(tokens: Tokens<'_>) -> ParseResult {
     let mut iter = Peekable::new_double(tokens);
     expression(&mut iter)
 }
 
-fn expression(tokens: &mut Peekable<Peekable<Tokens<'_>>>) -> Expression {
-    let subexpression = comparison(tokens);
-
-    todo!()
+fn expression(tokens: &mut TokenIter) -> ParseResult {
+    equality(tokens)
 }
 
-fn comparison(tokens: &mut Peekable<Peekable<Tokens<'_>>>) -> Expression {
+fn equality(tokens: &mut TokenIter) -> ParseResult {
+    let mut expression = comparison(tokens)?;
+    while let Some(Ok(Located {
+        item: Token::EqualEqual | Token::BangEqual,
+        ..
+    })) = tokens.peek()
+    {
+        let operator = tokens.next().unwrap().unwrap();
+        let rhs_expression = comparison(tokens)?;
+        expression = Expression::Binary(operator, expression.into(), rhs_expression.into());
+    }
+    Ok(expression)
+}
+
+fn comparison(tokens: &mut TokenIter) -> ParseResult {
     todo!()
 }
 
@@ -48,35 +68,35 @@ fn comparison(tokens: &mut Peekable<Peekable<Tokens<'_>>>) -> Expression {
 mod tests {
 
     use super::Expression::*;
-    use crate::lexer::{Token::*, TokenLocation};
+    use crate::{lexer::Token::*, Located};
 
     #[test]
     fn test() {
         let expr = Binary(
-            TokenLocation {
+            Located {
                 line: 1,
                 character: 1,
-                token: Star,
+                item: Star,
             },
             Unary(
-                TokenLocation {
+                Located {
                     line: 1,
                     character: 1,
-                    token: Minus,
+                    item: Minus,
                 },
-                Literal(TokenLocation {
+                Literal(Located {
                     line: 1,
                     character: 1,
-                    token: Number(123f64),
+                    item: Number(123f64),
                 })
                 .into(),
             )
             .into(),
             Grouping(
-                Literal(TokenLocation {
+                Literal(Located {
                     line: 1,
                     character: 1,
-                    token: Number(45.67),
+                    item: Number(45.67),
                 })
                 .into(),
             )

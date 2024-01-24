@@ -2,29 +2,10 @@ use std::{fmt::Display, num::ParseFloatError};
 
 use thiserror::Error as ThisError;
 
-use crate::util::Peekable;
-
-#[derive(Clone, Debug)]
-pub struct Error {
-    line: usize,
-    character: usize,
-    error: ErrorKind,
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "[{}:{}] Error: {}",
-            self.line, self.character, self.error
-        )
-    }
-}
-
-impl std::error::Error for Error {}
+use crate::{util::Peekable, Locateable, Located, LocatedAt};
 
 #[derive(Clone, Debug, ThisError)]
-pub enum ErrorKind {
+pub enum Error {
     #[error("Unterminated string")]
     UnterminatedString,
     #[error("Unterminated multiline comment")]
@@ -33,16 +14,6 @@ pub enum ErrorKind {
     NumberParseError(#[from] ParseFloatError),
     #[error("Unrecognized character: '{0}'")]
     UnrecognizedCharacer(char),
-}
-
-impl ErrorKind {
-    pub fn at(self, tokenizer: &Tokens) -> Error {
-        Error {
-            line: tokenizer.line,
-            character: tokenizer.character,
-            error: self,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -92,15 +63,6 @@ pub enum Token {
     Eof,
 }
 
-impl Token {
-    pub fn at(self, tokenizer: &Tokens) -> TokenLocation {
-        TokenLocation {
-            line: tokenizer.line,
-            character: tokenizer.character,
-            token: self,
-        }
-    }
-}
 
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -152,13 +114,6 @@ impl Display for Token {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct TokenLocation {
-    pub line: usize,
-    pub character: usize,
-    pub token: Token,
-}
-
 #[derive(Debug)]
 pub struct Tokens<'a> {
     source: Option<&'a str>,
@@ -196,7 +151,7 @@ impl<'a, T: Into<&'a str>> From<T> for Tokens<'a> {
 }
 
 impl Iterator for Tokens<'_> {
-    type Item = Result<TokenLocation, Error>;
+    type Item = Result<Located<Token>, Located<Error>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         'main: loop {
@@ -257,10 +212,8 @@ impl Iterator for Tokens<'_> {
                 match chars.peek_second() {
                     Some('/') => {
                         // comment
-                        let until_line_end: usize = chars
-                            .take_while(|&c| c != '\n')
-                            .map(char::len_utf8)
-                            .sum();
+                        let until_line_end: usize =
+                            chars.take_while(|&c| c != '\n').map(char::len_utf8).sum();
                         self.advance(until_line_end);
                         self.newline();
                         continue;
@@ -297,9 +250,7 @@ impl Iterator for Tokens<'_> {
                         }
 
                         // reached EOF before multiline comment terminated
-                        return Some(Err(
-                            ErrorKind::UnterminatedMultilineComment.at(self)
-                        ));
+                        return Some(Err(Error::UnterminatedMultilineComment.at(self)));
                     }
                     _ => {
                         // slash
@@ -341,19 +292,17 @@ impl Iterator for Tokens<'_> {
                 }
 
                 // reached EOF before string terminated
-                return Some(Err(ErrorKind::UnterminatedString.at(self)));
+                return Some(Err(Error::UnterminatedString.at(self)));
             }
 
             // match number literals
             if let Some('0'..='9') = chars.peek() {
-                let mut source_chars = source.chars();
                 let mut to_take = 0;
 
-                while let Some(num_char @ ('.' | '0'..='9')) = source_chars.next() {
+                while let Some(num_char @ ('.' | '0'..='9')) = chars.next() {
                     if num_char == '.' {
-                        if let Some('0'..='9') = source_chars.next() {
-                            to_take +=
-                                2 + source_chars.take_while(|c| matches!(c, '0'..='9')).count();
+                        if let Some('0'..='9') = chars.next() {
+                            to_take += 2 + chars.take_while(|c| matches!(c, '0'..='9')).count();
                         }
                         break;
                     } else {
@@ -366,7 +315,7 @@ impl Iterator for Tokens<'_> {
                 let parse_result = number_string
                     .parse()
                     .map(|float| Token::Number(float).at(self))
-                    .map_err(|err| ErrorKind::NumberParseError(err).at(self));
+                    .map_err(|err| Error::NumberParseError(err).at(self));
                 self.character += to_take;
                 return Some(parse_result);
             }
@@ -403,12 +352,23 @@ impl Iterator for Tokens<'_> {
             // unrecognized character
             if let Some(next_char) = chars.peek() {
                 *source = &source[next_char.len_utf8()..];
-                let result = Some(Err(
-                    ErrorKind::UnrecognizedCharacer(*next_char).at(self)
-                ));
+                let result = Some(Err(Error::UnrecognizedCharacer(*next_char).at(self)));
                 self.character += 1;
                 return result;
             }
         }
     }
 }
+
+impl Locateable for Tokens<'_> {
+    fn line(&self) -> usize {
+        self.line
+    }
+
+    fn character(&self) -> usize {
+        self.character
+    }
+}
+
+impl LocatedAt<Tokens<'_>> for Token {}
+impl LocatedAt<Tokens<'_>> for Error {}

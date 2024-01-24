@@ -1,8 +1,5 @@
 use std::{
-    fmt::Display,
-    io::{stdin, stdout, Write},
-    path::PathBuf,
-    error::Error as StdError,
+    error::Error as StdError, fmt::Display, io::{stdin, stdout, Write}, panic::Location, path::PathBuf
 };
 
 use lexer::Tokens;
@@ -10,16 +7,56 @@ use thiserror::Error as ThisError;
 
 use clap::Parser;
 
-use crate::lexer::TokenLocation;
-
 mod util;
 mod lexer;
 mod parser;
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
-    #[error("Error from lexer: {0}")]
-    Lexer(#[from] lexer::Error),
+    #[error("Lexer error: {0}")]
+    Lexer(#[from] Located<lexer::Error>),
+    #[error("Parser error: {0}")]
+    Parser(#[from] Located<parser::Error>),
+}
+
+#[derive(Clone, Debug)]
+pub struct Located<T> {
+    line: usize,
+    character: usize,
+    item: T,
+}
+
+impl<T: Display> Display for Located<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}:{}] {}", self.line, self.character, self.item)
+    }
+}
+
+impl<T: StdError> StdError for Located<T> {}
+
+pub trait Locateable {
+    fn line(&self) -> usize;
+    fn character(&self) -> usize;
+}
+
+impl<T> Locateable for Located<T> {
+    fn line(&self) -> usize {
+        self.line
+    }
+
+    fn character(&self) -> usize {
+        self.character
+    }
+}
+
+pub trait LocatedAt<T: Locateable>: Sized {
+    fn at(self, locator: &T) -> Located<Self> {
+        Located {
+            line: locator.line(),
+            character: locator.character(),
+            item: self,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -64,7 +101,7 @@ fn run(source: String) -> Result<(), Errors<Error>> {
 
     for token in Tokens::from(&*source) {
         match token {
-            Ok(TokenLocation { token, .. }) => print!("{} ", token),
+            Ok(Located { item: token, .. }) => print!("{} ", token),
             Err(err) => errors.push(err),
         }
     }
