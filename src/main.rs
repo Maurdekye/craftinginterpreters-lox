@@ -4,6 +4,7 @@ use std::{
     io::{stdin, stdout, Write},
     iter,
     path::PathBuf,
+    vec,
 };
 
 use lexer::Tokens;
@@ -20,7 +21,7 @@ mod util;
 pub enum Error {
     #[error("Lexer error: {0}")]
     Lexer(#[from] Located<lexer::Error>),
-    #[error("Parser error: {0}")]
+    #[error("Parser error:\n{0}")]
     Parser(#[from] MaybeLocated<parser::Error>),
 }
 
@@ -103,6 +104,21 @@ impl<E> FromIterator<E> for Errors<E> {
     }
 }
 
+impl<E> IntoIterator for Errors<E> {
+    type Item = E;
+    type IntoIter = vec::IntoIter<E>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<E, U: Into<E>> Extend<U> for Errors<E> {
+    fn extend<T: IntoIterator<Item = U>>(&mut self, iter: T) {
+        self.0.extend(iter.into_iter().map(Into::<E>::into));
+    }
+}
+
 // doesnt work :(
 // impl<E, O: From<E>> From<Errors<E>> for Errors<O> {
 //     fn from(value: Errors<E>) -> Self {
@@ -130,17 +146,24 @@ impl<E: StdError> StdError for Errors<E> {}
 /// Interpret lox code, evaluating and printing the execution result,
 /// and then return a list of any errors that may have been encountered
 fn run(source: String) -> Result<(), Errors<Error>> {
+    let mut errors = Errors::new();
     let mut dirty_tokens = Tokens::from(&*source);
     let clean_tokens = iter::from_fn(|| loop {
         match dirty_tokens.next() {
-            Some(Err(err)) => println!("{err}"),
+            Some(Err(err)) => errors.push(err),
             Some(Ok(token)) => return Some(token),
             None => return None,
         }
     });
-    let source = parser::parse(clean_tokens).map_err(|e| e.map(Error::from))?;
+    let source = match parser::parse(clean_tokens) {
+        Ok(source) => source,
+        Err(errs) => {
+            errors.extend(errs);
+            return Err(errors);
+        }
+    };
     println!("{source}");
-    Ok(())
+    errors.empty_ok(())
 }
 
 #[derive(Parser)]
