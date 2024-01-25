@@ -3,7 +3,7 @@ use std::{fmt::Display, iter::once};
 use crate::{
     lexer::Token,
     parser::Expression,
-    util::{Errors, Locateable, Located, MaybeLocated, MaybeLocatedAt},
+    util::{Errors, Locateable, Located, LocatedAt},
 };
 
 use thiserror::Error as ThisError;
@@ -11,17 +11,17 @@ use thiserror::Error as ThisError;
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
     #[error("Error evaluating unary expression:\n{0}")]
-    UnaryEvaluation(Box<MaybeLocated<Error>>),
+    UnaryEvaluation(Box<Located<Error>>),
     #[error("Error evaluating left hand side of binary expression:\n{0}")]
-    BinaryLeftEvaluation(Box<MaybeLocated<Error>>),
+    BinaryLeftEvaluation(Box<Located<Error>>),
     #[error("Error evaluating right hand side of binary expression:\n{0}")]
-    BinaryRightEvaluation(Box<MaybeLocated<Error>>),
+    BinaryRightEvaluation(Box<Located<Error>>),
     #[error("Error evaluating condition of ternary expression:\n{0}")]
-    TernaryConditionEvaluation(Box<MaybeLocated<Error>>),
+    TernaryConditionEvaluation(Box<Located<Error>>),
     #[error("Error evaluating true branch of ternary expression:\n{0}")]
-    TernaryTrueBranchEvaluation(Box<MaybeLocated<Error>>),
+    TernaryTrueBranchEvaluation(Box<Located<Error>>),
     #[error("Error evaluating false branch of ternary expression:\n{0}")]
-    TernaryFalseBranchEvaluation(Box<MaybeLocated<Error>>),
+    TernaryFalseBranchEvaluation(Box<Located<Error>>),
     #[error("Invalid unary '{0}' on value '{1}'")]
     InvalidUnary(Token, Value),
     #[error("Invalid binary '{0}' between values '{1}' and '{2}'")]
@@ -62,7 +62,7 @@ impl Display for Value {
         }
     }
 }
-    
+
 impl TryFrom<Token> for Value {
     type Error = Token;
 
@@ -81,62 +81,81 @@ impl TryFrom<Token> for Value {
 pub struct Interpreter;
 
 impl Interpreter {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 
-    pub fn interpret(&mut self, expression: Expression) -> Result<Value, Errors<MaybeLocated<Error>>> {
+    pub fn interpret(
+        &mut self,
+        expression: Located<Expression>,
+    ) -> Result<Value, Errors<Located<Error>>> {
         self.evaluate(expression).map_err(|e| once(e).collect())
     }
-    
-    pub fn evaluate(&mut self, expression: Expression) -> Result<Value, MaybeLocated<Error>> {
-        match expression {
+
+    pub fn evaluate(&mut self, expression: Located<Expression>) -> Result<Value, Located<Error>> {
+        match expression.item {
             Expression::Literal(literal_token) => self.literal(literal_token),
-            Expression::Grouping(sub_expression) => self.evaluate(*sub_expression),
-            Expression::Unary(unary_operator, unary_expr) => self.unary(unary_operator, *unary_expr),
+            Expression::Grouping(sub_expression) => self.evaluate(sub_expression.as_deref()),
+            Expression::Unary(unary_operator, unary_expr) => {
+                self.unary(unary_operator, unary_expr.as_deref())
+            }
             Expression::Binary(binary_operator, lhs_expr, rhs_expr) => {
-                self.binary(binary_operator, *lhs_expr, *rhs_expr)
+                self.binary(binary_operator, lhs_expr.as_deref(), rhs_expr.as_deref())
             }
-            Expression::Ternary(condition_expr, true_branch_expr, false_branch_expr) => {
-                self.ternary(*condition_expr, *true_branch_expr, *false_branch_expr)
-            }
+            Expression::Ternary(condition_expr, true_branch_expr, false_branch_expr) => self
+                .ternary(
+                    condition_expr.as_deref(),
+                    true_branch_expr.as_deref(),
+                    false_branch_expr.as_deref(),
+                ),
         }
     }
-    
-    fn literal(&mut self, literal: Located<Token>) -> Result<Value, MaybeLocated<Error>> {
+
+    fn literal(&mut self, literal: Located<Token>) -> Result<Value, Located<Error>> {
         let location = literal.location();
         literal
             .item
             .try_into()
-            .map_err(|value: Token| Error::InvalidLiteral(value).located_at(&location))
+            .map_err(|value: Token| Error::InvalidLiteral(value).at(&location))
     }
-    
-    fn unary(&mut self, unary: Located<Token>, unary_expr: Expression) -> Result<Value, MaybeLocated<Error>> {
+
+    fn unary(
+        &mut self,
+        unary: Located<Token>,
+        unary_expr: Located<Expression>,
+    ) -> Result<Value, Located<Error>> {
         let location = unary.location();
-        let value = self.evaluate(unary_expr)
-            .map_err(|err| Error::UnaryEvaluation(err.into()).located_at(&location))?;
+        let value = self
+            .evaluate(unary_expr)
+            .map_err(|err| Error::UnaryEvaluation(err.into()).at(&location))?;
         match (unary.item, value) {
             (Token::Minus, Value::Number(value)) => Ok(Value::Number(-value)),
             (Token::Bang, Value::False) => Ok(Value::True),
             (Token::Bang, Value::True) => Ok(Value::False),
-            (unary, value) => Err(Error::InvalidUnary(unary, value).located_at(&location)),
+            (unary, value) => Err(Error::InvalidUnary(unary, value).at(&location)),
         }
     }
-    
+
     fn binary(
-        &mut self, 
+        &mut self,
         binary: Located<Token>,
-        lhs_expr: Expression,
-        rhs_expr: Expression,
-    ) -> Result<Value, MaybeLocated<Error>> {
-        let location = binary.location();
-        let lhs_value = self.evaluate(lhs_expr)
-            .map_err(|err| Error::BinaryLeftEvaluation(err.into()).located_at(&location))?;
+        lhs_expr: Located<Expression>,
+        rhs_expr: Located<Expression>,
+    ) -> Result<Value, Located<Error>> {
+        let binary_location = binary.location();
+        let lhs_location = lhs_expr.location();
+        let rhs_location = rhs_expr.location();
+        let lhs_value = self
+            .evaluate(lhs_expr)
+            .map_err(|err| Error::BinaryLeftEvaluation(err.into()).at(&lhs_location))?;
         // match short circuit boolean operations
         let lhs_value = match (lhs_value, &binary.item) {
             (lhs @ Value::False, Token::And) | (lhs @ Value::True, Token::Or) => return Ok(lhs),
             (lhs, _) => lhs,
         };
-        let rhs_value = self.evaluate(rhs_expr)
-            .map_err(|err| Error::BinaryRightEvaluation(err.into()).located_at(&location))?;
+        let rhs_value = self
+            .evaluate(rhs_expr)
+            .map_err(|err| Error::BinaryRightEvaluation(err.into()).at(&rhs_location))?;
         match (lhs_value, binary.item, rhs_value) {
             (lhs, Token::EqualEqual, rhs) => Ok(self.compare(lhs, rhs).into()),
             (lhs, Token::BangEqual, rhs) => Ok((!self.compare(lhs, rhs)).into()),
@@ -144,15 +163,19 @@ impl Interpreter {
             (Value::Number(lhs), Token::Less, Value::Number(rhs)) => Ok((lhs < rhs).into()),
             (Value::Number(lhs), Token::LessEqual, Value::Number(rhs)) => Ok((lhs <= rhs).into()),
             (Value::Number(lhs), Token::Greater, Value::Number(rhs)) => Ok((lhs > rhs).into()),
-            (Value::Number(lhs), Token::GreaterEqual, Value::Number(rhs)) => Ok((lhs >= rhs).into()),
+            (Value::Number(lhs), Token::GreaterEqual, Value::Number(rhs)) => {
+                Ok((lhs >= rhs).into())
+            }
             (Value::Number(lhs), Token::Minus, Value::Number(rhs)) => Ok(Value::Number(lhs - rhs)),
             (Value::Number(lhs), Token::Plus, Value::Number(rhs)) => Ok(Value::Number(lhs + rhs)),
             (Value::Number(lhs), Token::Star, Value::Number(rhs)) => Ok(Value::Number(lhs * rhs)),
             (Value::Number(lhs), Token::Slash, Value::Number(rhs)) => Ok(Value::Number(lhs / rhs)),
-            (lhs, operator, rhs) => Err(Error::InvalidBinary(operator, lhs, rhs).located_at(&location)),
+            (lhs, operator, rhs) => {
+                Err(Error::InvalidBinary(operator, lhs, rhs).at(&binary_location))
+            }
         }
     }
-    
+
     fn compare(&mut self, lhs: Value, rhs: Value) -> bool {
         match (lhs, rhs) {
             (Value::True, Value::True) | (Value::False, Value::False) => true,
@@ -162,27 +185,32 @@ impl Interpreter {
             _ => false,
         }
     }
-    
+
     fn ternary(
-        &mut self, 
-        condition_expr: Expression,
-        true_branch_expr: Expression,
-        false_branch_expr: Expression,
-    ) -> Result<Value, MaybeLocated<Error>> {
-        let condition_value = self.evaluate(condition_expr)
-            .map_err(|err| Error::TernaryConditionEvaluation(err.into()).unlocated())?;
+        &mut self,
+        condition_expr: Located<Expression>,
+        true_branch_expr: Located<Expression>,
+        false_branch_expr: Located<Expression>,
+    ) -> Result<Value, Located<Error>> {
+        let condition_location = condition_expr.location();
+        let true_branch_location = true_branch_expr.location();
+        let false_branch_location = false_branch_expr.location();
+        let condition_value = self
+            .evaluate(condition_expr)
+            .map_err(|err| Error::TernaryConditionEvaluation(err.into()).at(&condition_location))?;
         let condition_bool = match condition_value {
             Value::True => true,
             Value::False => false,
-            value => return Err(Error::InvalidTernary(value).unlocated()),
+            value => return Err(Error::InvalidTernary(value).at(&condition_location)),
         };
         if condition_bool {
-            self.evaluate(true_branch_expr)
-                .map_err(|err| Error::TernaryTrueBranchEvaluation(err.into()).unlocated())
+            self.evaluate(true_branch_expr).map_err(|err| {
+                Error::TernaryTrueBranchEvaluation(err.into()).at(&true_branch_location)
+            })
         } else {
-            self.evaluate(false_branch_expr)
-                .map_err(|err| Error::TernaryFalseBranchEvaluation(err.into()).unlocated())
+            self.evaluate(false_branch_expr).map_err(|err| {
+                Error::TernaryFalseBranchEvaluation(err.into()).at(&false_branch_location)
+            })
         }
     }
 }
-

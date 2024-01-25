@@ -7,7 +7,7 @@ use thiserror::Error as ThisError;
 
 use crate::{
     lexer::Token::{self, *},
-    util::{Errors, Located, MaybeLocated, MaybeLocatedAt, Peekable},
+    util::{Errors, Locateable, Located, LocatedAt, MaybeLocated, MaybeLocatedAt, Peekable},
 };
 
 #[derive(Clone, Debug, ThisError)]
@@ -37,36 +37,59 @@ pub enum Error {
 #[derive(Clone, Debug)]
 pub enum Expression {
     Literal(Located<Token>),
-    Grouping(Box<Expression>),
-    Unary(Located<Token>, Box<Expression>),
-    Binary(Located<Token>, Box<Expression>, Box<Expression>),
-    Ternary(Box<Expression>, Box<Expression>, Box<Expression>),
+    Grouping(Located<Box<Expression>>),
+    Unary(Located<Token>, Located<Box<Expression>>),
+    Binary(
+        Located<Token>,
+        Located<Box<Expression>>,
+        Located<Box<Expression>>,
+    ),
+    Ternary(
+        Located<Box<Expression>>,
+        Located<Box<Expression>>,
+        Located<Box<Expression>>,
+    ),
 }
 
 impl Display for Expression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expression::Literal(Located { item: token, .. }) => write!(f, "{token}"),
-            Expression::Grouping(expr) => write!(f, "(group {expr})"),
+            Expression::Grouping(Located { item: expr, .. }) => write!(f, "(group {expr})"),
             Expression::Unary(Located { item: token, .. }, expr) => write!(f, "({token} {expr})"),
             Expression::Binary(Located { item: token, .. }, lhs, rhs) => {
                 write!(f, "({token} {lhs} {rhs})")
             }
-            Expression::Ternary(cond, true_expr, false_expr) => {
+            Expression::Ternary(
+                Located { item: cond, .. },
+                Located {
+                    item: true_expr, ..
+                },
+                Located {
+                    item: false_expr, ..
+                },
+            ) => {
                 write!(f, "(? {cond} {true_expr} {false_expr})")
             }
         }
     }
 }
 
+impl From<Located<Expression>> for Located<Box<Expression>> {
+    fn from(value: Located<Expression>) -> Self {
+        let location = value.location();
+        Box::new(value.item).at(&location)
+    }
+}
+
 pub fn parse(
     tokens: impl Iterator<Item = Located<Token>>,
-) -> Result<Expression, Errors<MaybeLocated<Error>>> {
+) -> Result<Located<Expression>, Errors<MaybeLocated<Error>>> {
     let mut iter = Peekable::new(tokens);
     expression(&mut iter).map_err(|e| once(e).collect())
 }
 
-type ExpressionParseResult = Result<Expression, MaybeLocated<Error>>;
+type ExpressionParseResult = Result<Located<Expression>, MaybeLocated<Error>>;
 
 fn expression(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
@@ -92,7 +115,8 @@ fn ternary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
         let false_expr = binary(tokens).map_err(|err| {
             Error::TernaryExpressionFalseBranchParse(err.into()).located_if(colon_token.as_ref())
         })?;
-        expression = Expression::Ternary(expression.into(), true_expr.into(), false_expr.into());
+        let location = expression.location();
+        expression = Expression::Ternary(expression.into(), true_expr.into(), false_expr.into()).at(&location);
     }
     Ok(expression)
 }
@@ -118,7 +142,8 @@ fn binary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expres
         while let Some(operator) = tokens.next_if(|token| operator_pred(&token.item)) {
             let rhs_expression = sub_parser(tokens)
                 .map_err(|err| Error::BinaryExpressionParse(err.into()).located_at(&operator))?;
-            expression = Expression::Binary(operator, expression.into(), rhs_expression.into());
+            let location = expression.location();
+            expression = Expression::Binary(operator, expression.into(), rhs_expression.into()).at(&location);
         }
         Ok(expression)
     }
@@ -149,9 +174,10 @@ fn binary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expres
 
 fn unary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {
     if let Some(operator) = tokens.next_if(|token| matches!(token.item, Bang | Minus)) {
+        let location = operator.location();
         let rhs = unary(tokens)
-            .map_err(|err| Error::UnaryExpressionParse(err.into()).located_at(&operator))?;
-        Ok(Expression::Unary(operator, rhs.into()))
+            .map_err(|err| Error::UnaryExpressionParse(err.into()).located_at(&location))?;
+        Ok(Expression::Unary(operator, rhs.into()).at(&location))
     } else {
         primary(tokens)
     }
@@ -161,9 +187,10 @@ fn primary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
     let Some(next_token) = tokens.next() else {
         return Err(Error::UnexpectedEndOfTokenStream.unlocated());
     };
+    let location = next_token.location();
 
     match next_token.item {
-        False | True | Nil | Number(_) | String(_) => Ok(Expression::Literal(next_token)),
+        False | True | Nil | Number(_) | String(_) => Ok(Expression::Literal(next_token).at(&location)),
         LeftParen => {
             let sub_expression = expression(tokens)?;
             let close_token = tokens.next();
@@ -176,7 +203,7 @@ fn primary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
                         .located_if(close_token.as_ref()),
                 );
             };
-            Ok(Expression::Grouping(sub_expression.into()))
+            Ok(Expression::Grouping(sub_expression.into()).at(&location))
         }
         _ => Err(Error::UnexpectedToken(next_token.item.clone()).located_at(&next_token)),
     }

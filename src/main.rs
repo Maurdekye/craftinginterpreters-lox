@@ -20,12 +20,12 @@ mod util;
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
-    #[error("Lexer error: {0}")]
+    #[error("Lexer: {0}")]
     Lexer(#[from] Located<lexer::Error>),
-    #[error("Parser error:\n{0}")]
+    #[error("Parser:\n{0}")]
     Parser(#[from] MaybeLocated<parser::Error>),
-    #[error("Interpreter error:\n{0}")]
-    Interpreter(#[from] MaybeLocated<interpreter::Error>),
+    #[error("Interpreter:\n{0}")]
+    Interpreter(#[from] Located<interpreter::Error>),
 }
 
 impl From<Errors<MaybeLocated<parser::Error>>> for Errors<Error> {

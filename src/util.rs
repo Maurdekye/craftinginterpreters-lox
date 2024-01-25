@@ -81,6 +81,22 @@ pub struct Located<T> {
     pub item: T,
 }
 
+impl<T> Located<T> {
+    pub fn map<V>(self, f: impl FnOnce(T) -> V) -> Located<V> {
+        Located {
+            line: self.line,
+            character: self.character,
+            item: f(self.item),
+        }
+    }
+}
+
+impl<T> Located<Box<T>> {
+    pub fn as_deref(self) -> Located<T> {
+        self.map(|x| *x)
+    }
+}
+
 impl<T: Display> Display for Located<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[{}:{}] {}", self.line, self.character, self.item)
@@ -112,10 +128,10 @@ impl<T> Locateable for Located<T> {
 }
 
 pub trait LocatedAt: Sized {
-    fn at(self, locator: &impl Locateable) -> Located<Self> {
+    fn at(self, locateable: &impl Locateable) -> Located<Self> {
         Located {
-            line: locator.line(),
-            character: locator.character(),
+            line: locateable.line(),
+            character: locateable.character(),
             item: self,
         }
     }
