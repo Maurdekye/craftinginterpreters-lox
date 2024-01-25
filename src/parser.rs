@@ -124,16 +124,22 @@ fn binary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expres
     }
     binary_parse(
         tokens,
-        |t| matches!(t, EqualEqual | BangEqual),
+        |t| matches!(t, And | Or),
         |tokens| {
             binary_parse(
                 tokens,
-                |t| matches!(t, Greater | GreaterEqual | Less | LessEqual),
+                |t| matches!(t, EqualEqual | BangEqual),
                 |tokens| {
                     binary_parse(
                         tokens,
-                        |t| matches!(t, Minus | Plus),
-                        |tokens| binary_parse(tokens, |t| matches!(t, Slash | Star), unary),
+                        |t| matches!(t, Greater | GreaterEqual | Less | LessEqual),
+                        |tokens| {
+                            binary_parse(
+                                tokens,
+                                |t| matches!(t, Minus | Plus),
+                                |tokens| binary_parse(tokens, |t| matches!(t, Slash | Star), unary),
+                            )
+                        },
                     )
                 },
             )

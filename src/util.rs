@@ -92,6 +92,13 @@ impl<T: StdError> StdError for Located<T> {}
 pub trait Locateable {
     fn line(&self) -> usize;
     fn character(&self) -> usize;
+
+    fn location(&self) -> Location
+    where
+        Self: Sized,
+    {
+        self.into()
+    }
 }
 
 impl<T> Locateable for Located<T> {

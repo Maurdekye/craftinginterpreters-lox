@@ -3,7 +3,7 @@ use std::{fmt::Display, iter::once};
 use crate::{
     lexer::Token,
     parser::Expression,
-    util::{Errors, Located, Location, MaybeLocated, MaybeLocatedAt},
+    util::{Errors, Locateable, Located, MaybeLocated, MaybeLocatedAt},
 };
 
 use thiserror::Error as ThisError;
@@ -81,22 +81,31 @@ pub fn evaluate(expression: Expression) -> Result<Value, MaybeLocated<Error>> {
     }
 }
 
-fn literal(literal: Located<Token>) -> Result<Value, MaybeLocated<Error>> {
-    match literal.item {
-        Token::String(s) => Ok(Value::String(s)),
-        Token::Number(n) => Ok(Value::Number(n)),
-        Token::True => Ok(Value::True),
-        Token::False => Ok(Value::False),
-        Token::Nil => Ok(Value::Nil),
-        _ => {
-            let location = Location::from(&literal);
-            Err(Error::InvalidLiteral(literal.item).located_at(&location))
+impl TryFrom<Token> for Value {
+    type Error = Token;
+
+    fn try_from(value: Token) -> Result<Self, Self::Error> {
+        match value {
+            Token::String(s) => Ok(Value::String(s)),
+            Token::Number(n) => Ok(Value::Number(n)),
+            Token::True => Ok(Value::True),
+            Token::False => Ok(Value::False),
+            Token::Nil => Ok(Value::Nil),
+            value => Err(value),
         }
     }
 }
 
+fn literal(literal: Located<Token>) -> Result<Value, MaybeLocated<Error>> {
+    let location = literal.location();
+    literal
+        .item
+        .try_into()
+        .map_err(|value: Token| Error::InvalidLiteral(value).located_at(&location))
+}
+
 fn unary(unary: Located<Token>, unary_expr: Expression) -> Result<Value, MaybeLocated<Error>> {
-    let location = Location::from(&unary);
+    let location = unary.location();
     let value = evaluate(unary_expr)
         .map_err(|err| Error::UnaryEvaluation(err.into()).located_at(&location))?;
     match (unary.item, value) {
@@ -112,14 +121,19 @@ fn binary(
     lhs_expr: Expression,
     rhs_expr: Expression,
 ) -> Result<Value, MaybeLocated<Error>> {
-    let location = Location::from(&binary);
+    let location = binary.location();
     let lhs_value = evaluate(lhs_expr)
         .map_err(|err| Error::BinaryLeftEvaluation(err.into()).located_at(&location))?;
+    let lhs_value = match (lhs_value, &binary.item) {
+        (lhs @ Value::False, Token::And) | (lhs @ Value::True, Token::Or) => return Ok(lhs),
+        (lhs, _) => lhs,
+    };
     let rhs_value = evaluate(rhs_expr)
         .map_err(|err| Error::BinaryRightEvaluation(err.into()).located_at(&location))?;
     match (lhs_value, binary.item, rhs_value) {
         (lhs, Token::EqualEqual, rhs) => Ok(compare(lhs, rhs).into()),
         (lhs, Token::BangEqual, rhs) => Ok((!compare(lhs, rhs)).into()),
+        (Value::True, Token::And, rhs) | (Value::False, Token::Or, rhs) => Ok(rhs),
         (Value::Number(lhs), Token::Less, Value::Number(rhs)) => Ok((lhs < rhs).into()),
         (Value::Number(lhs), Token::LessEqual, Value::Number(rhs)) => Ok((lhs <= rhs).into()),
         (Value::Number(lhs), Token::Greater, Value::Number(rhs)) => Ok((lhs > rhs).into()),
