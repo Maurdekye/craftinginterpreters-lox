@@ -11,7 +11,7 @@ use thiserror::Error as ThisError;
 use clap::Parser;
 use util::{Errors, Located, MaybeLocated};
 
-use crate::util::ErrorsInto;
+use crate::{interpreter::Interpreter, util::ErrorsInto};
 
 mod interpreter;
 mod lexer;
@@ -36,7 +36,7 @@ impl From<Errors<MaybeLocated<parser::Error>>> for Errors<Error> {
 
 /// Interpret lox code, evaluating and printing the execution result,
 /// and then return a list of any errors that may have been encountered
-fn run(source: String) -> Result<(), Errors<Error>> {
+fn run_with(source: String, interpreter: &mut Interpreter) -> Result<(), Errors<Error>> {
     let mut errors: Errors<Error> = Errors::new();
     let mut raw_tokens = Tokens::from(&*source);
     let tokens = iter::from_fn(|| loop {
@@ -49,11 +49,15 @@ fn run(source: String) -> Result<(), Errors<Error>> {
     let Some(expression) = parser::parse(tokens).errors_into(&mut errors) else {
         return Err(errors);
     };
-    let Some(result) = interpreter::interpret(expression).errors_into(&mut errors) else {
+    let Some(result) = interpreter.interpret(expression).errors_into(&mut errors) else {
         return Err(errors);
     };
     println!("{result}");
     errors.empty_ok(())
+}
+
+fn run(source: String) -> Result<(), Errors<Error>> {
+    run_with(source, &mut Interpreter::new())
 }
 
 #[derive(Parser)]
@@ -80,18 +84,21 @@ fn main() -> Result<(), Box<dyn StdError>> {
         }
 
         // execute repl
-        _ => loop {
-            print!("> ");
-            stdout().flush()?;
-            let Some(line) = stdin().lines().next() else {
-                // ctrl+D or ctrl+Z
-                break;
-            };
-            if let Err(err) = run(line?) {
-                // error interpreting code
-                println!("{err}");
+        _ => {
+            let mut interpreter = Interpreter::new();
+            loop {
+                print!("> ");
+                stdout().flush()?;
+                let Some(line) = stdin().lines().next() else {
+                    // ctrl+D or ctrl+Z
+                    break;
+                };
+                if let Err(err) = run_with(line?, &mut interpreter) {
+                    // error interpreting code
+                    println!("{err}");
+                }
             }
-        },
+        }
     }
 
     Ok(())
