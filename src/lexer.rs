@@ -227,8 +227,9 @@ impl Iterator for Tokens<'_> {
                 (Some('>'), _) => Some((Token::Greater, 1)),
                 _ => None,
             } {
+                let result = Some(Ok(token.at(self)));
                 self.advance(advance_by);
-                return Some(Ok(token.at(self)));
+                return result;
             }
 
             // match comment or slash
