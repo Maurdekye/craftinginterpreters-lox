@@ -26,6 +26,8 @@ pub enum Error {
     InvalidUnary(Token, Value),
     #[error("Invalid binary '{1}' between values '{0}' and '{2}'")]
     InvalidBinary(Value, Token, Value),
+    #[error("Attempt to divide '{0}' by zero")]
+    DivisionByZero(Value),
     #[error("Invalid ternary condtion: expected boolean, found '{0}'")]
     InvalidTernary(Value),
     #[error("Expected literal, found '{0}'")]
@@ -177,8 +179,15 @@ impl Interpreter {
             (Value::Number(lhs), Token::GreaterEqual, Value::Number(rhs)) => {
                 Ok((lhs >= rhs).into())
             }
+            (Value::String(lhs), Token::Less, Value::String(rhs)) => Ok((lhs < rhs).into()),
+            (Value::String(lhs), Token::LessEqual, Value::String(rhs)) => Ok((lhs <= rhs).into()),
+            (Value::String(lhs), Token::Greater, Value::String(rhs)) => Ok((lhs > rhs).into()),
+            (Value::String(lhs), Token::GreaterEqual, Value::String(rhs)) => Ok((lhs >= rhs).into()),
 
             // arithmetic
+            (lhs, Token::Slash, Value::Number(rhs)) if rhs == 0.0 => {
+                Err(Error::DivisionByZero(lhs).at(&lhs_location))
+            }
             (Value::Number(lhs), Token::Minus, Value::Number(rhs)) => Ok(Value::Number(lhs - rhs)),
             (Value::Number(lhs), Token::Plus, Value::Number(rhs)) => Ok(Value::Number(lhs + rhs)),
             (Value::Number(lhs), Token::Star, Value::Number(rhs)) => Ok(Value::Number(lhs * rhs)),
@@ -188,6 +197,8 @@ impl Interpreter {
             (Value::String(lhs), Token::Plus, Value::String(rhs)) => {
                 Ok(Value::String(format!("{lhs}{rhs}")))
             }
+            (Value::String(lhs), Token::Plus, rhs) => Ok(Value::String(format!("{lhs}{rhs}"))),
+            (lhs, Token::Plus, Value::String(rhs)) => Ok(Value::String(format!("{lhs}{rhs}"))),
 
             // invalid
             (lhs, operator, rhs) => {
