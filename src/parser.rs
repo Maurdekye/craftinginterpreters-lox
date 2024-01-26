@@ -26,7 +26,7 @@ pub enum Error {
     #[error("Error parsing expression statement:\n{0}")]
     ExpressionStatementParse(Box<MaybeLocated<Error>>),
 
-    #[error("Missing Semicolon after expression")]
+    #[error("Missing semicolon at end of statement")]
     MissingSemicolon,
     #[error("Unexpected end of token stream")]
     UnexpectedEndOfTokenStream,
@@ -173,7 +173,8 @@ fn statement(
                 tokens,
                 |t| matches!(t, Semicolon),
                 || Error::MissingSemicolon,
-            )?;
+            )
+            .with_err_located_at(Error::PrintStatementParse, &location)?;
             Ok(Statement::Print(expr).at(&location))
         }
         Some(expression_token) => {
@@ -184,7 +185,8 @@ fn statement(
                 tokens,
                 |t| matches!(t, Semicolon),
                 || Error::MissingSemicolon,
-            )?;
+            )
+            .with_err_located_at(Error::ExpressionStatementParse, &location)?;
             Ok(Statement::Expression(expr).at(&location))
         }
         None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
