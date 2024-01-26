@@ -7,7 +7,10 @@ use thiserror::Error as ThisError;
 
 use crate::{
     lexer::Token::{self, *},
-    util::{Errors, Locateable, Located, LocatedAt, MaybeLocated, MaybeLocatedAt, Peekable},
+    util::{
+        AppendMaybeLocatedError, Errors, Locateable, Located, LocatedAt, MaybeLocated,
+        MaybeLocatedAt, Peekable,
+    },
 };
 
 #[derive(Clone, Debug, ThisError)]
@@ -105,18 +108,19 @@ fn ternary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
     }
     let mut expression = binary(tokens)?;
     while let Some(operator) = tokens.next_if(|token| matches!(token.item, QuestionMark)) {
-        let true_expr = binary(tokens).map_err(|err| {
-            Error::TernaryExpressionTrueBranchParse(err.into()).located_at(&operator)
-        })?;
+        let true_expr = binary(tokens)
+            .with_err_located_at(Error::TernaryExpressionTrueBranchParse, &operator)?;
         let colon_token = tokens.next();
         let Some(Located { item: Colon, .. }) = colon_token else {
             return Err(Error::MissingTernaryColon.located_if(colon_token.as_ref()));
         };
-        let false_expr = binary(tokens).map_err(|err| {
-            Error::TernaryExpressionFalseBranchParse(err.into()).located_if(colon_token.as_ref())
-        })?;
+        let false_expr = binary(tokens).with_err_located_if(
+            Error::TernaryExpressionFalseBranchParse,
+            colon_token.as_ref(),
+        )?;
         let location = expression.location();
-        expression = Expression::Ternary(expression.into(), true_expr.into(), false_expr.into()).at(&location);
+        expression = Expression::Ternary(expression.into(), true_expr.into(), false_expr.into())
+            .at(&location);
     }
     Ok(expression)
 }
@@ -141,9 +145,10 @@ fn binary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expres
         let mut expression = sub_parser(tokens)?;
         while let Some(operator) = tokens.next_if(|token| operator_pred(&token.item)) {
             let rhs_expression = sub_parser(tokens)
-                .map_err(|err| Error::BinaryExpressionParse(err.into()).located_at(&operator))?;
+                .with_err_located_at(Error::BinaryExpressionParse, &operator)?;
             let location = expression.location();
-            expression = Expression::Binary(operator, expression.into(), rhs_expression.into()).at(&location);
+            expression = Expression::Binary(operator, expression.into(), rhs_expression.into())
+                .at(&location);
         }
         Ok(expression)
     }
@@ -175,8 +180,8 @@ fn binary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expres
 fn unary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {
     if let Some(operator) = tokens.next_if(|token| matches!(token.item, Bang | Minus)) {
         let location = operator.location();
-        let rhs = unary(tokens)
-            .map_err(|err| Error::UnaryExpressionParse(err.into()).located_at(&location))?;
+        let rhs =
+            unary(tokens).with_err_located_at(Error::UnaryExpressionParse, &location)?;
         Ok(Expression::Unary(operator, rhs.into()).at(&location))
     } else {
         primary(tokens)
@@ -190,7 +195,9 @@ fn primary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
     let location = next_token.location();
 
     match next_token.item {
-        False | True | Nil | Number(_) | String(_) => Ok(Expression::Literal(next_token).at(&location)),
+        False | True | Nil | Number(_) | String(_) => {
+            Ok(Expression::Literal(next_token).at(&location))
+        }
         LeftParen => {
             let sub_expression = expression(tokens)?;
             let close_token = tokens.next();

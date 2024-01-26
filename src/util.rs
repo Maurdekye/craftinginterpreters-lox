@@ -142,7 +142,7 @@ impl<T> LocatedAt for T {}
 pub trait AppendLocatedError<F, U, E, T> {
     type Output;
 
-    fn with_err(self, err_factory: F, locateable: &impl Locateable) -> Self::Output;
+    fn with_err_at(self, err_factory: F, locateable: &impl Locateable) -> Self::Output;
 }
 
 impl<V, F, U, E, T> AppendLocatedError<F, U, E, T> for Result<V, E>
@@ -152,8 +152,48 @@ where
 {
     type Output = Result<V, Located<T>>;
 
-    fn with_err(self, err_factory: F, locateable: &impl Locateable) -> Self::Output {
+    fn with_err_at(self, err_factory: F, locateable: &impl Locateable) -> Self::Output {
         self.map_err(|err| err_factory(err.into()).at(locateable))
+    }
+}
+
+pub trait AppendMaybeLocatedError<F, U, E, T> {
+    type Output;
+
+    fn with_err_located_if(
+        self,
+        err_factory: F,
+        locateable: Option<&impl Locateable>,
+    ) -> Self::Output;
+
+    fn with_err_located_at(self, err_factory: F, locateable: &impl Locateable) -> Self::Output
+    where
+        Self: Sized,
+    {
+        self.with_err_located_if(err_factory, Some(locateable))
+    }
+
+    fn with_err_unlocated<L: Locateable>(self, err_factory: F) -> Self::Output
+    where
+        Self: Sized,
+    {
+        self.with_err_located_if(err_factory, <Option<&L>>::None)
+    }
+}
+
+impl<V, F, U, E, T> AppendMaybeLocatedError<F, U, E, T> for Result<V, E>
+where
+    U: From<E>,
+    F: FnOnce(U) -> T,
+{
+    type Output = Result<V, MaybeLocated<T>>;
+
+    fn with_err_located_if(
+        self,
+        err_factory: F,
+        locateable: Option<&impl Locateable>,
+    ) -> Self::Output {
+        self.map_err(|err| err_factory(err.into()).located_if(locateable))
     }
 }
 

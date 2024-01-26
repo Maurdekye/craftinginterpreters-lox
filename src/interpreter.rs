@@ -116,7 +116,7 @@ impl Interpreter {
         literal
             .item
             .try_into()
-            .with_err(Error::InvalidLiteral, &location)
+            .with_err_at(Error::InvalidLiteral, &location)
     }
 
     fn unary(
@@ -127,7 +127,7 @@ impl Interpreter {
         let location = unary.location();
         let value = self
             .evaluate(unary_expr)
-            .with_err(Error::UnaryEvaluation, &location)?;
+            .with_err_at(Error::UnaryEvaluation, &location)?;
         match (unary.item, value) {
             (Token::Minus, Value::Number(value)) => Ok(Value::Number(-value)),
             (Token::Bang, Value::False | Value::Nil) => Ok(Value::True),
@@ -148,7 +148,7 @@ impl Interpreter {
 
         let lhs_value = self
             .evaluate(lhs_expr)
-            .with_err(Error::BinaryLeftEvaluation, &lhs_location)?;
+            .with_err_at(Error::BinaryLeftEvaluation, &lhs_location)?;
 
         // match short circuit boolean operations before evaluating right hand side
         let lhs_value = match (lhs_value, &binary.item) {
@@ -160,7 +160,7 @@ impl Interpreter {
 
         let rhs_value = self
             .evaluate(rhs_expr)
-            .with_err(Error::BinaryRightEvaluation, &rhs_location)?;
+            .with_err_at(Error::BinaryRightEvaluation, &rhs_location)?;
 
         match (lhs_value, binary.item, rhs_value) {
             // equality
@@ -208,7 +208,7 @@ impl Interpreter {
 
         let condition_value = self
             .evaluate(condition_expr)
-            .with_err(Error::TernaryConditionEvaluation, &condition_location)?;
+            .with_err_at(Error::TernaryConditionEvaluation, &condition_location)?;
         let condition_bool = match condition_value {
             Value::True => true,
             Value::False => false,
@@ -217,10 +217,10 @@ impl Interpreter {
 
         if condition_bool {
             self.evaluate(true_branch_expr)
-                .with_err(Error::TernaryTrueBranchEvaluation, &true_branch_location)
+                .with_err_at(Error::TernaryTrueBranchEvaluation, &true_branch_location)
         } else {
             self.evaluate(false_branch_expr)
-                .with_err(Error::TernaryFalseBranchEvaluation, &false_branch_location)
+                .with_err_at(Error::TernaryFalseBranchEvaluation, &false_branch_location)
         }
     }
 }
