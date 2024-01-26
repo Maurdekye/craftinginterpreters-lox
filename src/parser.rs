@@ -305,19 +305,19 @@ fn assignment(
             return Err(Error::InvalidAssignmentTarget(expression).located_at(&ident_location));
         };
         let rhs_expression = assignment(tokens)?;
-        let rhs_location = rhs_expression.location();
         Ok(
             Expression::Assignment(name.at(&ident_location), rhs_expression.into())
-                .at(&rhs_location),
+                .at(&ident_location),
         )
     }
     if let Some(operator) = tokens.next_if(|token| matches!(token.item, Token::Equal)) {
         return Err(Error::UnexpectedAssignmentOperator.located_at(&operator));
     }
     let mut expression = ternary(tokens)?;
-    if let Some(eq_token) = tokens.next_if(|token| matches!(token.item, Token::Equal)) {
+    if let Some(_eq_token) = tokens.next_if(|token| matches!(token.item, Token::Equal)) {
+        let target_location = expression.location();
         expression = assignment_expression(tokens, expression)
-            .with_err_located_at(Error::AssignmentExpressionParse, &eq_token)?;
+            .with_err_located_at(Error::AssignmentExpressionParse, &target_location)?;
     }
     Ok(expression)
 }

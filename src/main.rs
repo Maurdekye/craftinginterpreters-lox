@@ -21,11 +21,11 @@ mod util;
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
-    #[error("Lexer: {0}")]
+    #[error("Lexer Error: {0}")]
     Lexer(#[from] Located<lexer::Error>),
-    #[error("Parser:\n{0}")]
+    #[error("Parser Error:\n{0}")]
     Parser(#[from] MaybeLocated<parser::Error>),
-    #[error("Interpreter:\n{0}")]
+    #[error("Interpreter Error:\n{0}")]
     Interpreter(#[from] Located<interpreter::Error>),
 }
 
@@ -42,7 +42,7 @@ impl Termination for Error {
 pub enum RootError {
     #[error("IO: {0}")]
     IO(#[from] io::Error),
-    #[error("Lox: {0}")]
+    #[error("Lox {0}")]
     Lox(#[from] Errors<Error>),
 }
 
