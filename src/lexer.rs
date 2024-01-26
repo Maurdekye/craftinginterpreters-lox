@@ -317,7 +317,12 @@ impl Iterator for Tokens<'_> {
                 }
 
                 // reached EOF before string terminated
-                return Some(Err(Error::UnterminatedString.at(self)));
+                // +1 to skip the opening quote
+                *source = &source[to_take + 1..];
+                let result = Some(Err(Error::UnterminatedString.at(self)));
+                self.line = new_line;
+                self.character = new_character;
+                return result
             }
 
             // match number literals
