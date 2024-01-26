@@ -92,7 +92,7 @@ impl Interpreter {
         self.evaluate(expression).map_err(|e| once(e).collect())
     }
 
-    pub fn evaluate(&mut self, expression: Located<Expression>) -> Result<Value, Located<Error>> {
+    fn evaluate(&mut self, expression: Located<Expression>) -> Result<Value, Located<Error>> {
         match expression.item {
             Expression::Literal(literal_token) => self.literal(literal_token),
             Expression::Grouping(sub_expression) => self.evaluate(sub_expression.as_deref()),

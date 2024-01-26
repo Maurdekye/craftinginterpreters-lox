@@ -5,6 +5,7 @@ use std::{
     path::PathBuf,
 };
 
+use interpreter::Value;
 use lexer::Tokens;
 use thiserror::Error as ThisError;
 
@@ -36,7 +37,7 @@ impl From<Errors<MaybeLocated<parser::Error>>> for Errors<Error> {
 
 /// Interpret lox code, evaluating and printing the execution result,
 /// and then return a list of any errors that may have been encountered
-fn run_with(source: String, interpreter: &mut Interpreter) -> Result<(), Errors<Error>> {
+fn run_with(source: String, interpreter: &mut Interpreter) -> Result<Value, Errors<Error>> {
     let mut errors: Errors<Error> = Errors::new();
     let mut raw_tokens = Tokens::from(&*source);
     let tokens = iter::from_fn(|| loop {
@@ -52,11 +53,10 @@ fn run_with(source: String, interpreter: &mut Interpreter) -> Result<(), Errors<
     let Some(result) = interpreter.interpret(expression).errors_into(&mut errors) else {
         return Err(errors);
     };
-    println!("{result}");
-    errors.empty_ok(())
+    errors.empty_ok(result)
 }
 
-fn run(source: String) -> Result<(), Errors<Error>> {
+fn run(source: String) -> Result<Value, Errors<Error>> {
     run_with(source, &mut Interpreter::new())
 }
 
@@ -75,12 +75,12 @@ fn main() -> Result<(), Box<dyn StdError>> {
 
     match (args.file, args.source) {
         // run code inline
-        (_, Some(source)) => run(source)?,
+        (_, Some(source)) => println!("{}", run(source)?),
 
         // run from source file
         (Some(file), _) => {
             let source = std::fs::read_to_string(file)?;
-            run(source)?;
+            println!("{}", run(source)?);
         }
 
         // execute repl
@@ -93,9 +93,9 @@ fn main() -> Result<(), Box<dyn StdError>> {
                     // ctrl+D or ctrl+Z
                     break;
                 };
-                if let Err(err) = run_with(line?, &mut interpreter) {
-                    // error interpreting code
-                    println!("{err}");
+                match run_with(line?, &mut interpreter) {
+                    Ok(value) => println!("{value}"),
+                    Err(errs) => println!("{errs}"),
                 }
             }
         }
