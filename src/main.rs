@@ -94,13 +94,16 @@ fn _main() -> Result<(), RootError> {
     let args = Args::parse();
 
     match (args.file, args.source) {
+        
         // run code inline
-        (_, Some(source)) => println!("{}", run(source)?),
+        (_, Some(source)) => {
+            run(source)?;
+        }
 
         // run from source file
         (Some(file), _) => {
             let source = std::fs::read_to_string(file)?;
-            println!("{}", run(source)?);
+            run(source)?;
         }
 
         // execute repl
@@ -114,7 +117,7 @@ fn _main() -> Result<(), RootError> {
                     break;
                 };
                 match run_with(line?, &mut interpreter) {
-                    Ok(value) => println!("{value}"),
+                    Ok(_) => (),
                     Err(errs) => println!("{errs}"),
                 }
             }

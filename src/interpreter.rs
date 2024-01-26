@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{collections::HashMap, fmt::Display};
 
 use crate::{
     lexer::Token,
@@ -27,7 +27,11 @@ pub enum Error {
     PrintStatementEvaluation(Box<Located<Error>>),
     #[error("Error evaluating expression statement:\n{0}")]
     ExpressionStatementEvaluation(Box<Located<Error>>),
+    #[error("Error evaluating variable declaration:\n{0}")]
+    VarStatementEvaluation(Box<Located<Error>>),
 
+    #[error("Attempt to reference undeclared variable '{0}'")]
+    UndeclaredVariable(String),
     #[error("Invalid unary '{0}' on value '{1}'")]
     InvalidUnary(Token, Value),
     #[error("Invalid binary '{1}' between values '{0}' and '{2}'")]
@@ -86,13 +90,19 @@ impl TryFrom<Token> for Value {
     }
 }
 
-pub struct Interpreter;
+pub struct Interpreter {
+    environment: HashMap<String, Value>,
+}
 
 impl Interpreter {
     pub fn new() -> Self {
-        Self
+        Self {
+            environment: HashMap::new(),
+        }
     }
 
+    /// The signature is set up to support statements *potentially* evaluating to a
+    /// value in future versions of the code, but currently, they always evaluate to Nil.
     pub fn interpret(
         &mut self,
         statements: Vec<Located<Statement>>,
@@ -116,20 +126,30 @@ impl Interpreter {
                     value => format!("{value}"),
                 };
                 println!("{repr}");
-                Ok(Value::Nil)
             }
             Statement::Expression(expression) => {
-                let result = self
-                    .evaluate(expression)
+                self.evaluate(expression)
                     .with_err_at(Error::ExpressionStatementEvaluation, &location)?;
-                Ok(result)
+            }
+            Statement::Var(name, expression) => {
+                let value = self
+                    .evaluate(expression)
+                    .with_err_at(Error::VarStatementEvaluation, &location)?;
+                self.environment.insert(name, value);
             }
         }
+        Ok(Value::Nil)
     }
 
     fn evaluate(&mut self, expression: Located<Expression>) -> Result<Value, Located<Error>> {
+        let location = expression.location();
         match expression.item {
             Expression::Literal(literal_token) => self.literal(literal_token),
+            Expression::Variable(name) => self
+                .environment
+                .get(&name)
+                .cloned()
+                .ok_or_else(|| Error::UndeclaredVariable(name).at(&location)),
             Expression::Grouping(sub_expression) => self.evaluate(sub_expression.as_deref()),
             Expression::Unary(unary_operator, unary_expr) => {
                 self.unary(unary_operator, unary_expr.as_deref())
