@@ -204,37 +204,36 @@ fn declaration(
             },
         ) => {
             let location = var_token.location();
-            tokens.next();
-            let Some(Located {
-                item: Token::Identifier(name),
-                ..
-            }) = tokens.next()
-            else {
-                return Err(Error::MissingVarIdentifier.located_at(&location))
-                    .with_err_located_at(Error::VarStatementParse, &location);
-            };
-            match tokens.next() {
-                Some(Located {
-                    item: Token::Semicolon,
+            (|| {
+                tokens.next();
+                let Some(Located {
+                    item: Token::Identifier(name),
                     ..
-                }) => Ok(Statement::Var(name, None).at(&location)),
-                Some(Located {
-                    item: Token::Equal, ..
-                }) => {
-                    let var_expr = expression(tokens)
-                        .with_err_located_at(Error::VarStatementParse, &location)?;
-                    consume_semicolon(tokens)
-                        .with_err_located_at(Error::VarStatementParse, &location)?;
-                    Ok(Statement::Var(name, Some(var_expr)).at(&location))
+                }) = tokens.next()
+                else {
+                    return Err(Error::MissingVarIdentifier.located_at(&location));
+                };
+                match tokens.next() {
+                    Some(Located {
+                        item: Token::Semicolon,
+                        ..
+                    }) => Ok(Statement::Var(name, None).at(&location)),
+                    Some(Located {
+                        item: Token::Equal, ..
+                    }) => {
+                        let var_expr = expression(tokens)?;
+                        consume_semicolon(tokens)?;
+                        Ok(Statement::Var(name, Some(var_expr)).at(&location))
+                    }
+                    Some(unexpected_token) => {
+                        let token_location = unexpected_token.location();
+                        Err(Error::UnexpectedToken(unexpected_token.item)
+                            .located_at(&token_location))
+                    }
+                    None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
                 }
-                Some(unexpected_token) => {
-                    let token_location = unexpected_token.location();
-                    Err(Error::UnexpectedToken(unexpected_token.item).located_at(&token_location))
-                        .with_err_located_at(Error::VarStatementParse, &location)
-                }
-                None => Err(Error::UnexpectedEndOfTokenStream.unlocated())
-                    .with_err_located_at(Error::VarStatementParse, &location),
-            }
+            })()
+            .with_err_located_at(Error::VarStatementParse, &location)
         }
         _ => statement(tokens),
     }
@@ -250,19 +249,22 @@ fn statement(
             },
         ) => {
             let location = print_token.location();
-            tokens.next();
-            let expr: Located<Expression> =
-                expression(tokens).with_err_located_at(Error::PrintStatementParse, &location)?;
-            consume_semicolon(tokens).with_err_located_at(Error::PrintStatementParse, &location)?;
-            Ok(Statement::Print(expr).at(&location))
+            (|| {
+                tokens.next();
+                let expr: Located<Expression> = expression(tokens)?;
+                consume_semicolon(tokens)?;
+                Ok::<_, MaybeLocated<Error>>(Statement::Print(expr).at(&location))
+            })()
+            .with_err_located_at(Error::PrintStatementParse, &location)
         }
         Some(expression_token) => {
             let location = expression_token.location();
-            let expr = expression(tokens)
-                .with_err_located_at(Error::ExpressionStatementParse, &location)?;
-            consume_semicolon(tokens)
-                .with_err_located_at(Error::ExpressionStatementParse, &location)?;
-            Ok(Statement::Expression(expr).at(&location))
+            (|| {
+                let expr = expression(tokens)?;
+                consume_semicolon(tokens)?;
+                Ok::<_, MaybeLocated<Error>>(Statement::Expression(expr).at(&location))
+            })()
+            .with_err_located_at(Error::ExpressionStatementParse, &location)
         }
         None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
     }
