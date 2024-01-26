@@ -194,9 +194,6 @@ impl Interpreter {
             (Value::Number(lhs), Token::Slash, Value::Number(rhs)) => Ok(Value::Number(lhs / rhs)),
 
             // string concatenation
-            (Value::String(lhs), Token::Plus, Value::String(rhs)) => {
-                Ok(Value::String(format!("{lhs}{rhs}")))
-            }
             (Value::String(lhs), Token::Plus, rhs) => Ok(Value::String(format!("{lhs}{rhs}"))),
             (lhs, Token::Plus, Value::String(rhs)) => Ok(Value::String(format!("{lhs}{rhs}"))),
 
