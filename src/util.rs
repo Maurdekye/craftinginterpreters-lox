@@ -139,6 +139,24 @@ pub trait LocatedAt: Sized {
 
 impl<T> LocatedAt for T {}
 
+pub trait AppendLocatedError<F, U, E, T> {
+    type Output;
+
+    fn with_err(self, err_factory: F, locateable: &impl Locateable) -> Self::Output;
+}
+
+impl<V, F, U, E, T> AppendLocatedError<F, U, E, T> for Result<V, E>
+where
+    U: From<E>,
+    F: FnOnce(U) -> T,
+{
+    type Output = Result<V, Located<T>>;
+
+    fn with_err(self, err_factory: F, locateable: &impl Locateable) -> Self::Output {
+        self.map_err(|err| err_factory(err.into()).at(locateable))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum MaybeLocated<T> {
     Located(Located<T>),
@@ -248,8 +266,12 @@ impl<E, U: Into<E>> Extend<U> for Errors<E> {
 
 impl<E: Display> Display for Errors<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for err in &self.0 {
-            writeln!(f, "{err}")?;
+        let mut errs_iter = self.0.iter();
+        if let Some(err) = errs_iter.next() {
+            write!(f, "{err}")?;
+            for err in errs_iter {
+                write!(f, "\n{err}")?;
+            }
         }
         Ok(())
     }

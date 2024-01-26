@@ -3,7 +3,7 @@ use std::{fmt::Display, iter::once};
 use crate::{
     lexer::Token,
     parser::Expression,
-    util::{Errors, Locateable, Located, LocatedAt},
+    util::{AppendLocatedError, Errors, Locateable, Located, LocatedAt},
 };
 
 use thiserror::Error as ThisError;
@@ -24,15 +24,15 @@ pub enum Error {
     TernaryFalseBranchEvaluation(Box<Located<Error>>),
     #[error("Invalid unary '{0}' on value '{1}'")]
     InvalidUnary(Token, Value),
-    #[error("Invalid binary '{0}' between values '{1}' and '{2}'")]
-    InvalidBinary(Token, Value, Value),
+    #[error("Invalid binary '{1}' between values '{0}' and '{2}'")]
+    InvalidBinary(Value, Token, Value),
     #[error("Invalid ternary condtion: expected boolean, found '{0}'")]
     InvalidTernary(Value),
     #[error("Expected literal, found '{0}'")]
     InvalidLiteral(Token),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     String(String),
     Number(f64),
@@ -116,7 +116,7 @@ impl Interpreter {
         literal
             .item
             .try_into()
-            .map_err(|value: Token| Error::InvalidLiteral(value).at(&location))
+            .with_err(Error::InvalidLiteral, &location)
     }
 
     fn unary(
@@ -127,10 +127,10 @@ impl Interpreter {
         let location = unary.location();
         let value = self
             .evaluate(unary_expr)
-            .map_err(|err| Error::UnaryEvaluation(err.into()).at(&location))?;
+            .with_err(Error::UnaryEvaluation, &location)?;
         match (unary.item, value) {
             (Token::Minus, Value::Number(value)) => Ok(Value::Number(-value)),
-            (Token::Bang, Value::False) => Ok(Value::True),
+            (Token::Bang, Value::False | Value::Nil) => Ok(Value::True),
             (Token::Bang, Value::True) => Ok(Value::False),
             (unary, value) => Err(Error::InvalidUnary(unary, value).at(&location)),
         }
@@ -145,44 +145,54 @@ impl Interpreter {
         let binary_location = binary.location();
         let lhs_location = lhs_expr.location();
         let rhs_location = rhs_expr.location();
+
         let lhs_value = self
             .evaluate(lhs_expr)
-            .map_err(|err| Error::BinaryLeftEvaluation(err.into()).at(&lhs_location))?;
-        // match short circuit boolean operations
+            .with_err(Error::BinaryLeftEvaluation, &lhs_location)?;
+
+        // match short circuit boolean operations before evaluating right hand side
         let lhs_value = match (lhs_value, &binary.item) {
-            (lhs @ Value::False, Token::And) | (lhs @ Value::True, Token::Or) => return Ok(lhs),
+            (lhs @ (Value::False | Value::Nil), Token::And) | (lhs @ Value::True, Token::Or) => {
+                return Ok(lhs)
+            }
             (lhs, _) => lhs,
         };
+
         let rhs_value = self
             .evaluate(rhs_expr)
-            .map_err(|err| Error::BinaryRightEvaluation(err.into()).at(&rhs_location))?;
+            .with_err(Error::BinaryRightEvaluation, &rhs_location)?;
+
         match (lhs_value, binary.item, rhs_value) {
-            (lhs, Token::EqualEqual, rhs) => Ok(self.compare(lhs, rhs).into()),
-            (lhs, Token::BangEqual, rhs) => Ok((!self.compare(lhs, rhs)).into()),
-            (Value::True, Token::And, rhs) | (Value::False, Token::Or, rhs) => Ok(rhs),
+            // equality
+            (lhs, Token::EqualEqual, rhs) => Ok((lhs == rhs).into()),
+            (lhs, Token::BangEqual, rhs) => Ok((lhs != rhs).into()),
+
+            // boolean
+            (Value::True, Token::And, rhs) | (Value::False | Value::Nil, Token::Or, rhs) => Ok(rhs),
+
+            // comparison
             (Value::Number(lhs), Token::Less, Value::Number(rhs)) => Ok((lhs < rhs).into()),
             (Value::Number(lhs), Token::LessEqual, Value::Number(rhs)) => Ok((lhs <= rhs).into()),
             (Value::Number(lhs), Token::Greater, Value::Number(rhs)) => Ok((lhs > rhs).into()),
             (Value::Number(lhs), Token::GreaterEqual, Value::Number(rhs)) => {
                 Ok((lhs >= rhs).into())
             }
+
+            // arithmetic
             (Value::Number(lhs), Token::Minus, Value::Number(rhs)) => Ok(Value::Number(lhs - rhs)),
             (Value::Number(lhs), Token::Plus, Value::Number(rhs)) => Ok(Value::Number(lhs + rhs)),
             (Value::Number(lhs), Token::Star, Value::Number(rhs)) => Ok(Value::Number(lhs * rhs)),
             (Value::Number(lhs), Token::Slash, Value::Number(rhs)) => Ok(Value::Number(lhs / rhs)),
-            (lhs, operator, rhs) => {
-                Err(Error::InvalidBinary(operator, lhs, rhs).at(&binary_location))
-            }
-        }
-    }
 
-    fn compare(&mut self, lhs: Value, rhs: Value) -> bool {
-        match (lhs, rhs) {
-            (Value::True, Value::True) | (Value::False, Value::False) => true,
-            (Value::Nil, Value::Nil) => true,
-            (Value::String(lhs), Value::String(rhs)) => lhs == rhs,
-            (Value::Number(lhs), Value::Number(rhs)) => lhs == rhs,
-            _ => false,
+            // string concatenation
+            (Value::String(lhs), Token::Plus, Value::String(rhs)) => {
+                Ok(Value::String(format!("{lhs}{rhs}")))
+            }
+
+            // invalid
+            (lhs, operator, rhs) => {
+                Err(Error::InvalidBinary(lhs, operator, rhs).at(&binary_location))
+            }
         }
     }
 
@@ -195,22 +205,22 @@ impl Interpreter {
         let condition_location = condition_expr.location();
         let true_branch_location = true_branch_expr.location();
         let false_branch_location = false_branch_expr.location();
+
         let condition_value = self
             .evaluate(condition_expr)
-            .map_err(|err| Error::TernaryConditionEvaluation(err.into()).at(&condition_location))?;
+            .with_err(Error::TernaryConditionEvaluation, &condition_location)?;
         let condition_bool = match condition_value {
             Value::True => true,
             Value::False => false,
             value => return Err(Error::InvalidTernary(value).at(&condition_location)),
         };
+
         if condition_bool {
-            self.evaluate(true_branch_expr).map_err(|err| {
-                Error::TernaryTrueBranchEvaluation(err.into()).at(&true_branch_location)
-            })
+            self.evaluate(true_branch_expr)
+                .with_err(Error::TernaryTrueBranchEvaluation, &true_branch_location)
         } else {
-            self.evaluate(false_branch_expr).map_err(|err| {
-                Error::TernaryFalseBranchEvaluation(err.into()).at(&false_branch_location)
-            })
+            self.evaluate(false_branch_expr)
+                .with_err(Error::TernaryFalseBranchEvaluation, &false_branch_location)
         }
     }
 }

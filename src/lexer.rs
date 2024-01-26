@@ -125,7 +125,7 @@ pub struct Tokens<'a> {
 }
 
 impl<'a> Tokens<'a> {
-    const START_CHAR: usize = 0;
+    const START_CHAR: usize = 1;
 
     pub fn new(source: impl Into<&'a str>) -> Self {
         Self {
