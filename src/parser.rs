@@ -210,74 +210,83 @@ fn declaration(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
 ) -> StatementParseResult {
     match tokens.peek() {
-        Some(
-            var_token @ Located {
-                item: Token::Var, ..
-            },
-        ) => {
-            let location = var_token.location();
-            (|| {
-                tokens.next();
-                let Some(Located {
-                    item: Token::Identifier(name),
-                    ..
-                }) = tokens.next()
-                else {
-                    return Err(Error::MissingVarIdentifier.located_at(&location));
-                };
-                match tokens.next() {
-                    Some(Located {
-                        item: Token::Semicolon,
-                        ..
-                    }) => Ok(Statement::Var(name, None).at(&location)),
-                    Some(Located {
-                        item: Token::Equal, ..
-                    }) => {
-                        let var_expr = expression(tokens)?;
-                        consume_semicolon(tokens)?;
-                        Ok(Statement::Var(name, Some(var_expr)).at(&location))
-                    }
-                    Some(unexpected_token) => {
-                        let token_location = unexpected_token.location();
-                        Err(Error::UnexpectedToken(unexpected_token.item)
-                            .located_at(&token_location))
-                    }
-                    None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
+        Some(token_location @ Located { .. }) => {
+            let location = token_location.location();
+            match token_location.item {
+                Token::Var => {
+                    var(tokens, &location).with_err_located_at(Error::VarStatementParse, &location)
                 }
-            })()
-            .with_err_located_at(Error::VarStatementParse, &location)
+                _ => statement(tokens),
+            }
         }
-        _ => statement(tokens),
+        None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
+    }
+}
+
+fn var(
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+    location: &Location,
+) -> StatementParseResult {
+    tokens.next();
+    let Some(Located {
+        item: Token::Identifier(name),
+        ..
+    }) = tokens.next()
+    else {
+        return Err(Error::MissingVarIdentifier.located_at(location));
+    };
+    match tokens.next() {
+        Some(Located {
+            item: Token::Semicolon,
+            ..
+        }) => Ok(Statement::Var(name, None).at(location)),
+        Some(Located {
+            item: Token::Equal, ..
+        }) => {
+            let var_expr = expression(tokens)?;
+            consume_semicolon(tokens)?;
+            Ok(Statement::Var(name, Some(var_expr)).at(location))
+        }
+        Some(unexpected_token) => {
+            let token_location = unexpected_token.location();
+            Err(Error::UnexpectedToken(unexpected_token.item).located_at(&token_location))
+        }
+        None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
     }
 }
 
 fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> StatementParseResult {
     match tokens.peek() {
-        Some(
-            print_token @ Located {
-                item: Token::Print, ..
-            },
-        ) => {
-            let location = print_token.location();
-            (|| -> StatementParseResult {
-                tokens.next();
-                let expr: Located<Expression> = expression(tokens)?;
-                consume_semicolon(tokens)?;
-                Ok(Statement::Print(expr).at(&location))
-            })()
-            .with_err_located_at(Error::PrintStatementParse, &location)
-        }
-        Some(expression_token) => {
-            let location = expression_token.location();
-            (|| -> StatementParseResult {
-                let expr = expression(tokens)?;
-                consume_semicolon(tokens)?;
-                Ok(Statement::Expression(expr).at(&location))
-            })()
-            .with_err_located_at(Error::ExpressionStatementParse, &location)
+        Some(located_token @ Located { .. }) => {
+            let location = located_token.location();
+            match located_token.item {
+                Token::Print => print(tokens, &location)
+                    .with_err_located_at(Error::PrintStatementParse, &location),
+                _ => expression_statement(tokens)
+                    .with_err_located_at(Error::ExpressionStatementParse, &location),
+            }
         }
         None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
     }
+}
+
+fn print(
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+    print_location: &Location,
+) -> StatementParseResult {
+    tokens.next();
+    let expr: Located<Expression> = expression(tokens)?;
+    consume_semicolon(tokens)?;
+    Ok(Statement::Print(expr).at(print_location))
+}
+
+fn expression_statement(
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+) -> StatementParseResult {
+    let expr = expression(tokens)?;
+    let location = expr.location();
+    consume_semicolon(tokens)?;
+    Ok(Statement::Expression(expr).at(&location))
 }
 
 type ExpressionParseResult = Result<Located<Expression>, MaybeLocated<Error>>;
@@ -291,24 +300,28 @@ fn expression(
 fn assignment(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
 ) -> ExpressionParseResult {
+    fn assignment_expression(
+        tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+        expression: Located<Expression>,
+    ) -> ExpressionParseResult {
+        let (ident_location, expression) = expression.split();
+        let Expression::Variable(name) = expression else {
+            return Err(Error::InvalidAssignmentTarget(expression).located_at(&ident_location));
+        };
+        let rhs_expression = assignment(tokens)?;
+        let rhs_location = rhs_expression.location();
+        Ok(
+            Expression::Assignment(name.at(&ident_location), rhs_expression.into())
+                .at(&rhs_location),
+        )
+    }
     if let Some(operator) = tokens.next_if(|token| matches!(token.item, Token::Equal)) {
         return Err(Error::UnexpectedAssignmentOperator.located_at(&operator));
     }
     let mut expression = ternary(tokens)?;
-    let location = expression.location();
     if let Some(eq_token) = tokens.next_if(|token| matches!(token.item, Token::Equal)) {
-        expression = (|| -> ExpressionParseResult {
-            let (ident_location, expression) = expression.split();
-            let Expression::Variable(name) = expression else {
-                return Err(Error::InvalidAssignmentTarget(expression).located_at(&eq_token));
-            };
-            let rhs_expression = assignment(tokens)?;
-            Ok(
-                Expression::Assignment(name.at(&ident_location), rhs_expression.into())
-                    .at(&location),
-            )
-        })()
-        .with_err_located_at(Error::AssignmentExpressionParse, &eq_token)?;
+        expression = assignment_expression(tokens, expression)
+            .with_err_located_at(Error::AssignmentExpressionParse, &eq_token)?;
     }
     Ok(expression)
 }
