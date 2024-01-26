@@ -111,7 +111,11 @@ impl Interpreter {
                 let result = self
                     .evaluate(expression)
                     .with_err_at(Error::PrintStatementEvaluation, &location)?;
-                println!("{result}");
+                let repr = match result {
+                    Value::String(s) => s,
+                    value => format!("{value}"),
+                };
+                println!("{repr}");
                 Ok(Value::Nil)
             }
             Statement::Expression(expression) => {
