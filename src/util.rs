@@ -95,7 +95,7 @@ impl<T> Located<T> {
         }
     }
 
-    pub fn unpair(self) -> (Location, T) {
+    pub fn split(self) -> (Location, T) {
         let Located {
             line,
             character,

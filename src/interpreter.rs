@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt::Display};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    fmt::Display,
+};
 
 use crate::{
     lexer::Token,
@@ -16,18 +19,8 @@ pub enum Error {
     UnaryEvaluation(Box<Located<Error>>),
     #[error("Error evaluating binary expression:\n{0}")]
     BinaryEvaluation(Box<Located<Error>>),
-    #[error("Error evaluating left hand side of binary expression:\n{0}")]
-    BinaryLeftEvaluation(Box<Located<Error>>),
-    #[error("Error evaluating right hand side of binary expression:\n{0}")]
-    BinaryRightEvaluation(Box<Located<Error>>),
     #[error("Error ternary expression:\n{0}")]
     TernaryEvaluation(Box<Located<Error>>),
-    #[error("Error evaluating condition of ternary expression:\n{0}")]
-    TernaryConditionEvaluation(Box<Located<Error>>),
-    #[error("Error evaluating true branch of ternary expression:\n{0}")]
-    TernaryTrueBranchEvaluation(Box<Located<Error>>),
-    #[error("Error evaluating false branch of ternary expression:\n{0}")]
-    TernaryFalseBranchEvaluation(Box<Located<Error>>),
 
     #[error("Error evaluating print statement:\n{0}")]
     PrintStatementEvaluation(Box<Located<Error>>),
@@ -156,7 +149,9 @@ impl Interpreter {
             Expression::Literal(literal_token) => self
                 .literal(literal_token)
                 .with_err_at(Error::InvalidLiteral, &location),
-            Expression::Variable(name) => self.variable(name).map_err(|err| err.at(&location)),
+            Expression::Variable(name) => self
+                .variable(name)
+                .with_err_at(Error::UndeclaredVariable, &location),
             Expression::Assignment(name, sub_expression) => self
                 .assignment(name, sub_expression.as_deref())
                 .with_err_at(Error::AssignmentEvaluation, &location),
@@ -181,21 +176,24 @@ impl Interpreter {
         literal.item.try_into()
     }
 
-    fn variable(&mut self, name: String) -> Result<Value, Error> {
-        self.environment
-            .get(&name)
-            .cloned()
-            .ok_or_else(|| Error::UndeclaredVariable(name))
+    fn variable(&mut self, name: String) -> Result<Value, String> {
+        self.environment.get(&name).cloned().ok_or(name)
     }
 
     fn assignment(
         &mut self,
-        name: String,
+        name: Located<String>,
         expression: Located<Expression>,
     ) -> Result<Value, Located<Error>> {
+        let (location, name) = name.split();
         let value = self.evaluate(expression)?;
-        self.environment.insert(name, value.clone());
-        Ok(value)
+        match self.environment.entry(name.clone()) {
+            Entry::Vacant(_) => Err(Error::UndeclaredVariable(name).at(&location)),
+            Entry::Occupied(mut entry) => {
+                entry.insert(value.clone());
+                Ok(value)
+            }
+        }
     }
 
     fn unary(
@@ -221,11 +219,8 @@ impl Interpreter {
     ) -> Result<Value, Located<Error>> {
         let binary_location = binary.location();
         let lhs_location = lhs_expr.location();
-        let rhs_location = rhs_expr.location();
 
-        let lhs_value = self
-            .evaluate(lhs_expr)
-            .with_err_at(Error::BinaryLeftEvaluation, &lhs_location)?;
+        let lhs_value = self.evaluate(lhs_expr)?;
 
         // match short circuit boolean operations before evaluating right hand side
         let lhs_value = match (lhs_value, &binary.item) {
@@ -235,9 +230,7 @@ impl Interpreter {
             (lhs, _) => lhs,
         };
 
-        let rhs_value = self
-            .evaluate(rhs_expr)
-            .with_err_at(Error::BinaryRightEvaluation, &rhs_location)?;
+        let rhs_value = self.evaluate(rhs_expr)?;
 
         match (lhs_value, binary.item, rhs_value) {
             // equality
@@ -277,6 +270,12 @@ impl Interpreter {
             (Value::String(lhs), Token::Plus, rhs) => Ok(Value::String(format!("{lhs}{rhs}"))),
             (lhs, Token::Plus, Value::String(rhs)) => Ok(Value::String(format!("{lhs}{rhs}"))),
 
+            // string cycling
+            (Value::String(string), Token::Star, Value::Number(quantity))
+            | (Value::Number(quantity), Token::Star, Value::String(string)) => {
+                Ok(Value::String(string.repeat(quantity as usize)))
+            }
+
             // invalid
             (lhs, operator, rhs) => {
                 Err(Error::InvalidBinary(lhs, operator, rhs).at(&binary_location))
@@ -291,12 +290,8 @@ impl Interpreter {
         false_branch_expr: Located<Expression>,
     ) -> Result<Value, Located<Error>> {
         let condition_location = condition_expr.location();
-        let true_branch_location = true_branch_expr.location();
-        let false_branch_location = false_branch_expr.location();
 
-        let condition_value = self
-            .evaluate(condition_expr)
-            .with_err_at(Error::TernaryConditionEvaluation, &condition_location)?;
+        let condition_value = self.evaluate(condition_expr)?;
         let condition_bool = match condition_value {
             Value::True => true,
             Value::False => false,
@@ -305,10 +300,8 @@ impl Interpreter {
 
         if condition_bool {
             self.evaluate(true_branch_expr)
-                .with_err_at(Error::TernaryTrueBranchEvaluation, &true_branch_location)
         } else {
             self.evaluate(false_branch_expr)
-                .with_err_at(Error::TernaryFalseBranchEvaluation, &false_branch_location)
         }
     }
 }

@@ -58,7 +58,7 @@ pub enum Error {
 pub enum Expression {
     Literal(Located<Token>),
     Variable(String),
-    Assignment(String, Located<Box<Expression>>),
+    Assignment(Located<String>, Located<Box<Expression>>),
     Grouping(Located<Box<Expression>>),
     Unary(Located<Token>, Located<Box<Expression>>),
     Binary(
@@ -295,13 +295,18 @@ fn assignment(
         return Err(Error::UnexpectedAssignmentOperator.located_at(&operator));
     }
     let mut expression = ternary(tokens)?;
+    let location = expression.location();
     if let Some(eq_token) = tokens.next_if(|token| matches!(token.item, Token::Equal)) {
         expression = (|| -> ExpressionParseResult {
-            let Expression::Variable(name) = expression.item else {
-                return Err(Error::InvalidAssignmentTarget(expression.item).located_at(&eq_token));
+            let (ident_location, expression) = expression.split();
+            let Expression::Variable(name) = expression else {
+                return Err(Error::InvalidAssignmentTarget(expression).located_at(&eq_token));
             };
             let rhs_expression = assignment(tokens)?;
-            Ok(Expression::Assignment(name, rhs_expression.into()).at(&eq_token))
+            Ok(
+                Expression::Assignment(name.at(&ident_location), rhs_expression.into())
+                    .at(&location),
+            )
         })()
         .with_err_located_at(Error::AssignmentExpressionParse, &eq_token)?;
     }
