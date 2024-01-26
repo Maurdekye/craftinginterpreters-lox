@@ -277,6 +277,24 @@ impl<E, U: Into<E>, T> ErrorsInto<E, T> for Result<T, Errors<U>> {
     }
 }
 
+pub trait ErrorInto<E, T> {
+    /// Extract the error from a result and push it into an
+    /// Errors collection, then transform the result into an Option
+    fn error_into(self, errors: &mut Errors<E>) -> Option<T>;
+}
+
+impl<E, U: Into<E>, T> ErrorInto<E, T> for Result<T, U> {
+    fn error_into(self, errors: &mut Errors<E>) -> Option<T> {
+        match self {
+            Ok(value) => Some(value),
+            Err(new_error) => {
+                errors.push(new_error);
+                None
+            }
+        }
+    }
+}
+
 impl<E> From<Vec<E>> for Errors<E> {
     fn from(value: Vec<E>) -> Self {
         Errors(value)

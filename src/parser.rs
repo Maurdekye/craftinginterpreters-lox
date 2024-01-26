@@ -1,14 +1,11 @@
-use std::{
-    fmt::{Debug, Display},
-    iter::once,
-};
+use std::fmt::{Debug, Display};
 
 use thiserror::Error as ThisError;
 
 use crate::{
     lexer::Token::{self, *},
     util::{
-        AppendMaybeLocatedError, Errors, Locateable, Located, LocatedAt, MaybeLocated,
+        AppendMaybeLocatedError, Errors, Locateable, Located, LocatedAt, Location, MaybeLocated,
         MaybeLocatedAt, Peekable,
     },
 };
@@ -23,6 +20,14 @@ pub enum Error {
     BinaryExpressionParse(Box<MaybeLocated<Error>>),
     #[error("Error parsing unary expression:\n{0}")]
     UnaryExpressionParse(Box<MaybeLocated<Error>>),
+
+    #[error("Error parsing print statement:\n{0}")]
+    PrintStatementParse(Box<MaybeLocated<Error>>),
+    #[error("Error parsing expression statement:\n{0}")]
+    ExpressionStatementParse(Box<MaybeLocated<Error>>),
+
+    #[error("Missing Semicolon after expression")]
+    MissingSemicolon,
     #[error("Unexpected end of token stream")]
     UnexpectedEndOfTokenStream,
     #[error("Unclosed opening paren at [{0}:{1}]")]
@@ -85,11 +90,105 @@ impl From<Located<Expression>> for Located<Box<Expression>> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum Statement {
+    Expression(Located<Expression>),
+    Print(Located<Expression>),
+}
+
+impl Display for Statement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Statement::Expression(expression) => writeln!(f, "{expression};"),
+            Statement::Print(expression) => writeln!(f, "print {expression};"),
+        }
+    }
+}
+
+fn synchronize(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) {
+    while let Some(_) = tokens.next_if(|token| {
+        !matches!(
+            token.item,
+            Semicolon | Class | Fun | Var | For | If | While | Print | Return
+        )
+    }) {}
+    tokens.next_if(|token| matches!(token.item, Semicolon));
+}
+
+fn consume(
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+    pred: impl FnOnce(&Token) -> bool,
+    error_factory: impl FnOnce() -> Error,
+) -> Result<Location, MaybeLocated<Error>> {
+    match tokens.peek() {
+        Some(located_token @ Located { item: token, .. }) => {
+            let location = located_token.location();
+            if pred(&token) {
+                tokens.next();
+                Ok(location)
+            } else {
+                Err(error_factory().located_at(&location))
+            }
+        }
+        None => Err(error_factory().unlocated()),
+    }
+}
+
 pub fn parse(
     tokens: impl Iterator<Item = Located<Token>>,
-) -> Result<Located<Expression>, Errors<MaybeLocated<Error>>> {
-    let mut iter = Peekable::new(tokens);
-    expression(&mut iter).map_err(|e| once(e).collect())
+) -> Result<Vec<Located<Statement>>, Errors<MaybeLocated<Error>>> {
+    let mut tokens = Peekable::new(tokens);
+    let mut statements = Vec::new();
+    let mut errors = Errors::new();
+
+    loop {
+        match tokens.peek() {
+            Some(Located {
+                item: Token::Eof, ..
+            }) => break,
+            Some(_) => match statement(&mut tokens) {
+                Ok(statement) => statements.push(statement),
+                Err(err) => {
+                    errors.push(err);
+                    synchronize(&mut tokens);
+                }
+            },
+            None => errors.push(Error::UnexpectedEndOfTokenStream.unlocated()),
+        }
+    }
+
+    errors.empty_ok(statements)
+}
+
+fn statement(
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+) -> Result<Located<Statement>, MaybeLocated<Error>> {
+    match tokens.peek() {
+        Some(print_token @ Located { item: Print, .. }) => {
+            let location = print_token.location();
+            tokens.next();
+            let expr =
+                expression(tokens).with_err_located_at(Error::PrintStatementParse, &location)?;
+            consume(
+                tokens,
+                |t| matches!(t, Semicolon),
+                || Error::MissingSemicolon,
+            )?;
+            Ok(Statement::Print(expr).at(&location))
+        }
+        Some(expression_token) => {
+            let location = expression_token.location();
+            let expr = expression(tokens)
+                .with_err_located_at(Error::ExpressionStatementParse, &location)?;
+            consume(
+                tokens,
+                |t| matches!(t, Semicolon),
+                || Error::MissingSemicolon,
+            )?;
+            Ok(Statement::Expression(expr).at(&location))
+        }
+        None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
+    }
 }
 
 type ExpressionParseResult = Result<Located<Expression>, MaybeLocated<Error>>;
@@ -110,13 +209,14 @@ fn ternary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
     while let Some(operator) = tokens.next_if(|token| matches!(token.item, QuestionMark)) {
         let true_expr = binary(tokens)
             .with_err_located_at(Error::TernaryExpressionTrueBranchParse, &operator)?;
-        let colon_token = tokens.next();
-        let Some(Located { item: Colon, .. }) = colon_token else {
-            return Err(Error::MissingTernaryColon.located_if(colon_token.as_ref()));
-        };
-        let false_expr = binary(tokens).with_err_located_if(
+        let colon_token_location = consume(
+            tokens,
+            |t| matches!(t, Colon),
+            || Error::MissingTernaryColon,
+        )?;
+        let false_expr = binary(tokens).with_err_located_at(
             Error::TernaryExpressionFalseBranchParse,
-            colon_token.as_ref(),
+            &colon_token_location,
         )?;
         let location = expression.location();
         expression = Expression::Ternary(expression.into(), true_expr.into(), false_expr.into())
@@ -144,8 +244,8 @@ fn binary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expres
         }
         let mut expression = sub_parser(tokens)?;
         while let Some(operator) = tokens.next_if(|token| operator_pred(&token.item)) {
-            let rhs_expression = sub_parser(tokens)
-                .with_err_located_at(Error::BinaryExpressionParse, &operator)?;
+            let rhs_expression =
+                sub_parser(tokens).with_err_located_at(Error::BinaryExpressionParse, &operator)?;
             let location = expression.location();
             expression = Expression::Binary(operator, expression.into(), rhs_expression.into())
                 .at(&location);
@@ -180,8 +280,7 @@ fn binary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expres
 fn unary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {
     if let Some(operator) = tokens.next_if(|token| matches!(token.item, Bang | Minus)) {
         let location = operator.location();
-        let rhs =
-            unary(tokens).with_err_located_at(Error::UnaryExpressionParse, &location)?;
+        let rhs = unary(tokens).with_err_located_at(Error::UnaryExpressionParse, &location)?;
         Ok(Expression::Unary(operator, rhs.into()).at(&location))
     } else {
         primary(tokens)

@@ -1,9 +1,9 @@
-use std::{fmt::Display, iter::once};
+use std::fmt::Display;
 
 use crate::{
     lexer::Token,
-    parser::Expression,
-    util::{AppendLocatedError, Errors, Locateable, Located, LocatedAt},
+    parser::{Expression, Statement},
+    util::{AppendLocatedError, Locateable, Located, LocatedAt},
 };
 
 use thiserror::Error as ThisError;
@@ -22,6 +22,12 @@ pub enum Error {
     TernaryTrueBranchEvaluation(Box<Located<Error>>),
     #[error("Error evaluating false branch of ternary expression:\n{0}")]
     TernaryFalseBranchEvaluation(Box<Located<Error>>),
+
+    #[error("Error evaluating print statement:\n{0}")]
+    PrintStatementEvaluation(Box<Located<Error>>),
+    #[error("Error evaluating expression statement:\n{0}")]
+    ExpressionStatementEvaluation(Box<Located<Error>>),
+
     #[error("Invalid unary '{0}' on value '{1}'")]
     InvalidUnary(Token, Value),
     #[error("Invalid binary '{1}' between values '{0}' and '{2}'")]
@@ -89,9 +95,32 @@ impl Interpreter {
 
     pub fn interpret(
         &mut self,
-        expression: Located<Expression>,
-    ) -> Result<Value, Errors<Located<Error>>> {
-        self.evaluate(expression).map_err(|e| once(e).collect())
+        statements: Vec<Located<Statement>>,
+    ) -> Result<Value, Located<Error>> {
+        let mut result = Value::Nil;
+        for statement in statements {
+            result = self.statement(statement)?;
+        }
+        Ok(result)
+    }
+
+    fn statement(&mut self, statement: Located<Statement>) -> Result<Value, Located<Error>> {
+        let location = statement.location();
+        match statement.item {
+            Statement::Print(expression) => {
+                let result = self
+                    .evaluate(expression)
+                    .with_err_at(Error::PrintStatementEvaluation, &location)?;
+                println!("{result}");
+                Ok(Value::Nil)
+            }
+            Statement::Expression(expression) => {
+                let result = self
+                    .evaluate(expression)
+                    .with_err_at(Error::ExpressionStatementEvaluation, &location)?;
+                Ok(result)
+            }
+        }
     }
 
     fn evaluate(&mut self, expression: Located<Expression>) -> Result<Value, Located<Error>> {
@@ -182,7 +211,9 @@ impl Interpreter {
             (Value::String(lhs), Token::Less, Value::String(rhs)) => Ok((lhs < rhs).into()),
             (Value::String(lhs), Token::LessEqual, Value::String(rhs)) => Ok((lhs <= rhs).into()),
             (Value::String(lhs), Token::Greater, Value::String(rhs)) => Ok((lhs > rhs).into()),
-            (Value::String(lhs), Token::GreaterEqual, Value::String(rhs)) => Ok((lhs >= rhs).into()),
+            (Value::String(lhs), Token::GreaterEqual, Value::String(rhs)) => {
+                Ok((lhs >= rhs).into())
+            }
 
             // arithmetic
             (lhs, Token::Slash, Value::Number(rhs)) if rhs == 0.0 => {
