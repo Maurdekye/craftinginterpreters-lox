@@ -30,8 +30,6 @@ pub enum Error {
 
     #[error("Missing identifier in variable declaration")]
     MissingVarIdentifier,
-    #[error("Missing equal sign in variable declaration")]
-    MissingVarEqual,
     #[error("Missing semicolon at end of statement")]
     MissingSemicolon,
     #[error("Unexpected end of token stream")]
@@ -102,7 +100,7 @@ impl From<Located<Expression>> for Located<Box<Expression>> {
 pub enum Statement {
     Print(Located<Expression>),
     Expression(Located<Expression>),
-    Var(String, Located<Expression>),
+    Var(String, Option<Located<Expression>>),
 }
 
 impl Display for Statement {
@@ -110,7 +108,10 @@ impl Display for Statement {
         match self {
             Statement::Print(expression) => writeln!(f, "(print {})", expression.item),
             Statement::Expression(expression) => writeln!(f, "{}", expression.item),
-            Statement::Var(name, expression) => {
+            Statement::Var(name, None) => {
+                writeln!(f, "(var {})", name)
+            }
+            Statement::Var(name, Some(expression)) => {
                 writeln!(f, "(var {} {})", name, expression.item)
             }
         }
@@ -212,16 +213,28 @@ fn declaration(
                 return Err(Error::MissingVarIdentifier.located_at(&location))
                     .with_err_located_at(Error::VarStatementParse, &location);
             };
-            consume(
-                tokens,
-                |t| matches!(t, Token::Equal),
-                || Error::MissingVarEqual,
-            )
-            .with_err_located_at(Error::VarStatementParse, &location)?;
-            let var_expr =
-                expression(tokens).with_err_located_at(Error::VarStatementParse, &location)?;
-            consume_semicolon(tokens).with_err_located_at(Error::VarStatementParse, &location)?;
-            Ok(Statement::Var(name, var_expr).at(&location))
+            match tokens.next() {
+                Some(Located {
+                    item: Token::Semicolon,
+                    ..
+                }) => Ok(Statement::Var(name, None).at(&location)),
+                Some(Located {
+                    item: Token::Equal, ..
+                }) => {
+                    let var_expr = expression(tokens)
+                        .with_err_located_at(Error::VarStatementParse, &location)?;
+                    consume_semicolon(tokens)
+                        .with_err_located_at(Error::VarStatementParse, &location)?;
+                    Ok(Statement::Var(name, Some(var_expr)).at(&location))
+                }
+                Some(unexpected_token) => {
+                    let token_location = unexpected_token.location();
+                    Err(Error::UnexpectedToken(unexpected_token.item).located_at(&token_location))
+                        .with_err_located_at(Error::VarStatementParse, &location)
+                }
+                None => Err(Error::UnexpectedEndOfTokenStream.unlocated())
+                    .with_err_located_at(Error::VarStatementParse, &location),
+            }
         }
         _ => statement(tokens),
     }
@@ -238,7 +251,7 @@ fn statement(
         ) => {
             let location = print_token.location();
             tokens.next();
-            let expr =
+            let expr: Located<Expression> =
                 expression(tokens).with_err_located_at(Error::PrintStatementParse, &location)?;
             consume_semicolon(tokens).with_err_located_at(Error::PrintStatementParse, &location)?;
             Ok(Statement::Print(expr).at(&location))

@@ -131,10 +131,13 @@ impl Interpreter {
                 self.evaluate(expression)
                     .with_err_at(Error::ExpressionStatementEvaluation, &location)?;
             }
-            Statement::Var(name, expression) => {
-                let value = self
-                    .evaluate(expression)
-                    .with_err_at(Error::VarStatementEvaluation, &location)?;
+            Statement::Var(name, maybe_expression) => {
+                let value = match maybe_expression {
+                    Some(expression) => self
+                        .evaluate(expression)
+                        .with_err_at(Error::VarStatementEvaluation, &location)?,
+                    None => Value::Nil,
+                };
                 self.environment.insert(name, value);
             }
         }
