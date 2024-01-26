@@ -20,6 +20,8 @@ pub enum Error {
     BinaryExpressionParse(Box<MaybeLocated<Error>>),
     #[error("Error parsing unary expression:\n{0}")]
     UnaryExpressionParse(Box<MaybeLocated<Error>>),
+    #[error("Error parsing assignment expression:\n{0}")]
+    AssignmentExpressionParse(Box<MaybeLocated<Error>>),
 
     #[error("Error parsing print statement:\n{0}")]
     PrintStatementParse(Box<MaybeLocated<Error>>),
@@ -28,16 +30,22 @@ pub enum Error {
     #[error("Error parsing variable declaration:\n{0}")]
     VarStatementParse(Box<MaybeLocated<Error>>),
 
+    #[error("Missing equals sign in assignment expression")]
+    MissingAssignmentEqual,
     #[error("Missing identifier in variable declaration")]
     MissingVarIdentifier,
     #[error("Missing semicolon at end of statement")]
     MissingSemicolon,
+    #[error("Invalid assignment target")]
+    InvalidAssignmentTarget(Expression),
     #[error("Unexpected end of token stream")]
     UnexpectedEndOfTokenStream,
     #[error("Unclosed opening paren at [{0}:{1}]")]
     UnclosedOpeningParen(usize, usize),
     #[error("Unexpected token: '{0}'")]
     UnexpectedToken(Token),
+    #[error("Unexpected assignment operator without identifier")]
+    UnexpectedAssignmentOperator,
     #[error("Unexpected binary operator without expression: '{0}'")]
     UnexpectedBinaryOperator(Token),
     #[error("Unexpected ternary operator without expression: '{0}'")]
@@ -50,6 +58,7 @@ pub enum Error {
 pub enum Expression {
     Literal(Located<Token>),
     Variable(String),
+    Assignment(String, Located<Box<Expression>>),
     Grouping(Located<Box<Expression>>),
     Unary(Located<Token>, Located<Box<Expression>>),
     Binary(
@@ -68,7 +77,8 @@ impl Display for Expression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expression::Literal(Located { item: token, .. }) => write!(f, "{token}"),
-            Expression::Variable(name) => write!(f, "(variable {name})"),
+            Expression::Variable(name) => write!(f, "(ref {name})"),
+            Expression::Assignment(name, expr) => write!(f, "(var {name} {expr})"),
             Expression::Grouping(Located { item: expr, .. }) => write!(f, "(group {expr})"),
             Expression::Unary(Located { item: token, .. }, expr) => write!(f, "({token} {expr})"),
             Expression::Binary(Located { item: token, .. }, lhs, rhs) => {
@@ -194,9 +204,11 @@ pub fn parse(
     errors.empty_ok(statements)
 }
 
+type StatementParseResult = Result<Located<Statement>, MaybeLocated<Error>>;
+
 fn declaration(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
-) -> Result<Located<Statement>, MaybeLocated<Error>> {
+) -> StatementParseResult {
     match tokens.peek() {
         Some(
             var_token @ Located {
@@ -239,9 +251,7 @@ fn declaration(
     }
 }
 
-fn statement(
-    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
-) -> Result<Located<Statement>, MaybeLocated<Error>> {
+fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> StatementParseResult {
     match tokens.peek() {
         Some(
             print_token @ Located {
@@ -249,20 +259,20 @@ fn statement(
             },
         ) => {
             let location = print_token.location();
-            (|| {
+            (|| -> StatementParseResult {
                 tokens.next();
                 let expr: Located<Expression> = expression(tokens)?;
                 consume_semicolon(tokens)?;
-                Ok::<_, MaybeLocated<Error>>(Statement::Print(expr).at(&location))
+                Ok(Statement::Print(expr).at(&location))
             })()
             .with_err_located_at(Error::PrintStatementParse, &location)
         }
         Some(expression_token) => {
             let location = expression_token.location();
-            (|| {
+            (|| -> StatementParseResult {
                 let expr = expression(tokens)?;
                 consume_semicolon(tokens)?;
-                Ok::<_, MaybeLocated<Error>>(Statement::Expression(expr).at(&location))
+                Ok(Statement::Expression(expr).at(&location))
             })()
             .with_err_located_at(Error::ExpressionStatementParse, &location)
         }
@@ -275,7 +285,27 @@ type ExpressionParseResult = Result<Located<Expression>, MaybeLocated<Error>>;
 fn expression(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
 ) -> ExpressionParseResult {
-    ternary(tokens)
+    assignment(tokens)
+}
+
+fn assignment(
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+) -> ExpressionParseResult {
+    if let Some(operator) = tokens.next_if(|token| matches!(token.item, Token::Equal)) {
+        return Err(Error::UnexpectedAssignmentOperator.located_at(&operator));
+    }
+    let mut expression = ternary(tokens)?;
+    if let Some(eq_token) = tokens.next_if(|token| matches!(token.item, Token::Equal)) {
+        expression = (|| -> ExpressionParseResult {
+            let Expression::Variable(name) = expression.item else {
+                return Err(Error::InvalidAssignmentTarget(expression.item).located_at(&eq_token));
+            };
+            let rhs_expression = assignment(tokens)?;
+            Ok(Expression::Assignment(name, rhs_expression.into()).at(&eq_token))
+        })()
+        .with_err_located_at(Error::AssignmentExpressionParse, &eq_token)?;
+    }
+    Ok(expression)
 }
 
 fn ternary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {

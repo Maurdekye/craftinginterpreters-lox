@@ -1,4 +1,9 @@
-use std::{error::Error as StdError, fmt::Display, process::{ExitCode, Termination}, vec};
+use std::{
+    error::Error as StdError,
+    fmt::Display,
+    process::{ExitCode, Termination},
+    vec,
+};
 
 pub struct Peekable<I: Iterator> {
     iter: I,
@@ -88,6 +93,15 @@ impl<T> Located<T> {
             character: self.character,
             item: f(self.item),
         }
+    }
+
+    pub fn unpair(self) -> (Location, T) {
+        let Located {
+            line,
+            character,
+            item,
+        } = self;
+        (Location { line, character }, item)
     }
 }
 

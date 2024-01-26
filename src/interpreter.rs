@@ -10,12 +10,18 @@ use thiserror::Error as ThisError;
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
+    #[error("Error evaluating assignment expression:\n{0}")]
+    AssignmentEvaluation(Box<Located<Error>>),
     #[error("Error evaluating unary expression:\n{0}")]
     UnaryEvaluation(Box<Located<Error>>),
+    #[error("Error evaluating binary expression:\n{0}")]
+    BinaryEvaluation(Box<Located<Error>>),
     #[error("Error evaluating left hand side of binary expression:\n{0}")]
     BinaryLeftEvaluation(Box<Located<Error>>),
     #[error("Error evaluating right hand side of binary expression:\n{0}")]
     BinaryRightEvaluation(Box<Located<Error>>),
+    #[error("Error ternary expression:\n{0}")]
+    TernaryEvaluation(Box<Located<Error>>),
     #[error("Error evaluating condition of ternary expression:\n{0}")]
     TernaryConditionEvaluation(Box<Located<Error>>),
     #[error("Error evaluating true branch of ternary expression:\n{0}")]
@@ -131,8 +137,8 @@ impl Interpreter {
                 self.evaluate(expression)
                     .with_err_at(Error::ExpressionStatementEvaluation, &location)?;
             }
-            Statement::Var(name, maybe_expression) => {
-                let value = match maybe_expression {
+            Statement::Var(name, maybe_initializer) => {
+                let value = match maybe_initializer {
                     Some(expression) => self
                         .evaluate(expression)
                         .with_err_at(Error::VarStatementEvaluation, &location)?,
@@ -147,34 +153,49 @@ impl Interpreter {
     fn evaluate(&mut self, expression: Located<Expression>) -> Result<Value, Located<Error>> {
         let location = expression.location();
         match expression.item {
-            Expression::Literal(literal_token) => self.literal(literal_token),
-            Expression::Variable(name) => self
-                .environment
-                .get(&name)
-                .cloned()
-                .ok_or_else(|| Error::UndeclaredVariable(name).at(&location)),
+            Expression::Literal(literal_token) => self
+                .literal(literal_token)
+                .with_err_at(Error::InvalidLiteral, &location),
+            Expression::Variable(name) => self.variable(name).map_err(|err| err.at(&location)),
+            Expression::Assignment(name, sub_expression) => self
+                .assignment(name, sub_expression.as_deref())
+                .with_err_at(Error::AssignmentEvaluation, &location),
             Expression::Grouping(sub_expression) => self.evaluate(sub_expression.as_deref()),
-            Expression::Unary(unary_operator, unary_expr) => {
-                self.unary(unary_operator, unary_expr.as_deref())
-            }
-            Expression::Binary(binary_operator, lhs_expr, rhs_expr) => {
-                self.binary(binary_operator, lhs_expr.as_deref(), rhs_expr.as_deref())
-            }
+            Expression::Unary(unary_operator, unary_expr) => self
+                .unary(unary_operator, unary_expr.as_deref())
+                .with_err_at(Error::UnaryEvaluation, &location),
+            Expression::Binary(binary_operator, lhs_expr, rhs_expr) => self
+                .binary(binary_operator, lhs_expr.as_deref(), rhs_expr.as_deref())
+                .with_err_at(Error::BinaryEvaluation, &location),
             Expression::Ternary(condition_expr, true_branch_expr, false_branch_expr) => self
                 .ternary(
                     condition_expr.as_deref(),
                     true_branch_expr.as_deref(),
                     false_branch_expr.as_deref(),
-                ),
+                )
+                .with_err_at(Error::TernaryEvaluation, &location),
         }
     }
 
-    fn literal(&mut self, literal: Located<Token>) -> Result<Value, Located<Error>> {
-        let location = literal.location();
-        literal
-            .item
-            .try_into()
-            .with_err_at(Error::InvalidLiteral, &location)
+    fn literal(&mut self, literal: Located<Token>) -> Result<Value, Token> {
+        literal.item.try_into()
+    }
+
+    fn variable(&mut self, name: String) -> Result<Value, Error> {
+        self.environment
+            .get(&name)
+            .cloned()
+            .ok_or_else(|| Error::UndeclaredVariable(name))
+    }
+
+    fn assignment(
+        &mut self,
+        name: String,
+        expression: Located<Expression>,
+    ) -> Result<Value, Located<Error>> {
+        let value = self.evaluate(expression)?;
+        self.environment.insert(name, value.clone());
+        Ok(value)
     }
 
     fn unary(
@@ -183,9 +204,7 @@ impl Interpreter {
         unary_expr: Located<Expression>,
     ) -> Result<Value, Located<Error>> {
         let location = unary.location();
-        let value = self
-            .evaluate(unary_expr)
-            .with_err_at(Error::UnaryEvaluation, &location)?;
+        let value = self.evaluate(unary_expr)?;
         match (unary.item, value) {
             (Token::Minus, Value::Number(value)) => Ok(Value::Number(-value)),
             (Token::Bang, Value::False | Value::Nil) => Ok(Value::True),
