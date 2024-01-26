@@ -1,8 +1,8 @@
 use std::{
-    error::Error as StdError,
-    io::{stdin, stdout, Write},
+    io::{self, stdin, stdout, Write},
     iter,
     path::PathBuf,
+    process::{ExitCode, Termination},
 };
 
 use interpreter::Value;
@@ -29,16 +29,36 @@ pub enum Error {
     Interpreter(#[from] Located<interpreter::Error>),
 }
 
-impl From<Errors<MaybeLocated<parser::Error>>> for Errors<Error> {
-    fn from(value: Errors<MaybeLocated<parser::Error>>) -> Self {
-        value.map(From::from)
+impl Termination for Error {
+    fn report(self) -> ExitCode {
+        match self {
+            Error::Interpreter(_) => ExitCode::from(70),
+            _ => ExitCode::from(65),
+        }
+    }
+}
+
+#[derive(Debug, ThisError)]
+pub enum RootError {
+    #[error("IO: {0}")]
+    IO(#[from] io::Error),
+    #[error("Lox: {0}")]
+    Lox(#[from] Errors<Error>),
+}
+
+impl Termination for RootError {
+    fn report(self) -> std::process::ExitCode {
+        match self {
+            RootError::IO(_) => ExitCode::FAILURE,
+            RootError::Lox(root_error) => root_error.report(),
+        }
     }
 }
 
 /// Interpret lox code, evaluating and printing the execution result,
 /// and then return a list of any errors that may have been encountered
 fn run_with(source: String, interpreter: &mut Interpreter) -> Result<Value, Errors<Error>> {
-    let mut errors: Errors<Error> = Errors::new();
+    let mut errors = Errors::new();
     let mut raw_tokens = Tokens::from(&*source);
     let tokens = iter::from_fn(|| loop {
         match raw_tokens.next() {
@@ -70,7 +90,7 @@ struct Args {
     source: Option<String>,
 }
 
-fn main() -> Result<(), Box<dyn StdError>> {
+fn _main() -> Result<(), RootError> {
     let args = Args::parse();
 
     match (args.file, args.source) {
@@ -102,4 +122,15 @@ fn main() -> Result<(), Box<dyn StdError>> {
     }
 
     Ok(())
+}
+
+// wish i didnt have to do this 😞
+fn main() -> ExitCode {
+    match _main() {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{err}");
+            err.report()
+        }
+    }
 }

@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, fmt::Display, vec};
+use std::{error::Error as StdError, fmt::Display, process::{ExitCode, Termination}, vec};
 
 pub struct Peekable<I: Iterator> {
     iter: I,
@@ -324,3 +324,12 @@ impl<E, T: Default> Into<Result<T, Errors<E>>> for Errors<E> {
 }
 
 impl<E: StdError> StdError for Errors<E> {}
+
+impl<E: Termination> Termination for Errors<E> {
+    fn report(self) -> std::process::ExitCode {
+        match self.into_iter().next() {
+            Some(e) => e.report(),
+            None => ExitCode::SUCCESS,
+        }
+    }
+}
