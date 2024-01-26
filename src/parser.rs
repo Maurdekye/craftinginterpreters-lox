@@ -12,11 +12,9 @@ use crate::{
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
-    #[error("Error parsing true branch of ternary expression:\n{0}")]
-    TernaryExpressionTrueBranchParse(Box<MaybeLocated<Error>>),
-    #[error("Error parsing false branch of ternary expression:\n{0}")]
-    TernaryExpressionFalseBranchParse(Box<MaybeLocated<Error>>),
-    #[error("Error parsing right hand side of binary expression:\n{0}")]
+    #[error("Error parsing ternary expression:\n{0}")]
+    TernaryExpressionParse(Box<MaybeLocated<Error>>),
+    #[error("Error parsing binary expression:\n{0}")]
     BinaryExpressionParse(Box<MaybeLocated<Error>>),
     #[error("Error parsing unary expression:\n{0}")]
     UnaryExpressionParse(Box<MaybeLocated<Error>>),
@@ -327,6 +325,23 @@ fn assignment(
 }
 
 fn ternary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {
+    fn ternary_body(
+        tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+        expression: Located<Expression>,
+    ) -> ExpressionParseResult {
+        let true_expr = binary(tokens)?;
+        consume(
+            tokens,
+            |t| matches!(t, Token::Colon),
+            || Error::MissingTernaryColon,
+        )?;
+        let false_expr = binary(tokens)?;
+        let location = expression.location();
+        Ok(
+            Expression::Ternary(expression.into(), true_expr.into(), false_expr.into())
+                .at(&location),
+        )
+    }
     if let Some(operator) = tokens
         .next_if(|token: &Located<Token>| matches!(token.item, Token::QuestionMark | Token::Colon))
     {
@@ -334,20 +349,8 @@ fn ternary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
     }
     let mut expression = binary(tokens)?;
     while let Some(operator) = tokens.next_if(|token| matches!(token.item, Token::QuestionMark)) {
-        let true_expr = binary(tokens)
-            .with_err_located_at(Error::TernaryExpressionTrueBranchParse, &operator)?;
-        let colon_token_location = consume(
-            tokens,
-            |t| matches!(t, Token::Colon),
-            || Error::MissingTernaryColon,
-        )?;
-        let false_expr = binary(tokens).with_err_located_at(
-            Error::TernaryExpressionFalseBranchParse,
-            &colon_token_location,
-        )?;
-        let location = expression.location();
-        expression = Expression::Ternary(expression.into(), true_expr.into(), false_expr.into())
-            .at(&location);
+        expression = ternary_body(tokens, expression)
+            .with_err_located_at(Error::TernaryExpressionParse, &operator)?;
     }
     Ok(expression)
 }
