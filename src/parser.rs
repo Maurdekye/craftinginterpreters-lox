@@ -12,43 +12,41 @@ use crate::{
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
-    #[error("Error parsing ternary expression:\n{0}")]
+    #[error("In this ternary:\n{0}")]
     TernaryExpressionParse(Box<MaybeLocated<Error>>),
-    #[error("Error parsing binary expression:\n{0}")]
+    #[error("In this binary expression:\n{0}")]
     BinaryExpressionParse(Box<MaybeLocated<Error>>),
-    #[error("Error parsing unary expression:\n{0}")]
+    #[error("At this unary operator:\n{0}")]
     UnaryExpressionParse(Box<MaybeLocated<Error>>),
-    #[error("Error parsing assignment expression:\n{0}")]
+    #[error("In this assignment:\n{0}")]
     AssignmentExpressionParse(Box<MaybeLocated<Error>>),
 
-    #[error("Error parsing print statement:\n{0}")]
+    #[error("In this print statement:\n{0}")]
     PrintStatementParse(Box<MaybeLocated<Error>>),
-    #[error("Error parsing expression statement:\n{0}")]
-    ExpressionStatementParse(Box<MaybeLocated<Error>>),
-    #[error("Error parsing variable declaration:\n{0}")]
+    #[error("In this var statement:\n{0}")]
     VarStatementParse(Box<MaybeLocated<Error>>),
+    #[error("In this statement:\n{0}")]
+    ExpressionStatementParse(Box<MaybeLocated<Error>>),
 
-    #[error("Missing equals sign in assignment expression")]
-    MissingAssignmentEqual,
-    #[error("Missing identifier in variable declaration")]
+    #[error("Where's the variable name?")]
     MissingVarIdentifier,
-    #[error("Missing semicolon at end of statement")]
+    #[error("You forgot a semicolon")]
     MissingSemicolon,
-    #[error("Invalid assignment target")]
+    #[error("That's not a variable name")]
     InvalidAssignmentTarget(Expression),
-    #[error("Unexpected end of token stream")]
+    #[error("File's ended")]
     UnexpectedEndOfTokenStream,
-    #[error("Unclosed opening paren at [{0}:{1}]")]
+    #[error("You forgot a ')' for the '(' at [{0}:{1}]")]
     UnclosedOpeningParen(usize, usize),
-    #[error("Unexpected token: '{0}'")]
+    #[error("What's '{0}' mean?")]
     UnexpectedToken(Token),
-    #[error("Unexpected assignment operator without identifier")]
+    #[error("This '=' doesnt make sense here, it's supposed to come after a variable name in an assignment")]
     UnexpectedAssignmentOperator,
-    #[error("Unexpected binary operator without expression: '{0}'")]
+    #[error("This '{0}' doesn't make sense here, it's supposed to be used in some sort of binary expression")]
     UnexpectedBinaryOperator(Token),
-    #[error("Unexpected ternary operator without expression: '{0}'")]
+    #[error("This '{0}' doesn't make sense here, it's supposed to be part of a ternary expression")]
     UnexpectedTernaryOperator(Token),
-    #[error("Missing ':' in ternary expression")]
+    #[error("You forgot a ':' after the true branch of your ternary expression")]
     MissingTernaryColon,
 }
 

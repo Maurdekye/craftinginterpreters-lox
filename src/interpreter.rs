@@ -13,33 +13,33 @@ use thiserror::Error as ThisError;
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
-    #[error("Error evaluating assignment expression:\n{0}")]
+    #[error("In this assignment:\n{0}")]
     AssignmentEvaluation(Box<Located<Error>>),
-    #[error("Error evaluating unary expression:\n{0}")]
+    #[error("At this unary operator:\n{0}")]
     UnaryEvaluation(Box<Located<Error>>),
-    #[error("Error evaluating binary expression:\n{0}")]
+    #[error("In this binary expression:\n{0}")]
     BinaryEvaluation(Box<Located<Error>>),
-    #[error("Error ternary expression:\n{0}")]
+    #[error("In this ternary:\n{0}")]
     TernaryEvaluation(Box<Located<Error>>),
 
-    #[error("Error evaluating print statement:\n{0}")]
-    PrintStatementEvaluation(Box<Located<Error>>),
-    #[error("Error evaluating expression statement:\n{0}")]
-    ExpressionStatementEvaluation(Box<Located<Error>>),
-    #[error("Error evaluating variable declaration:\n{0}")]
+    #[error("In this var statement:\n{0}")]
     VarStatementEvaluation(Box<Located<Error>>),
+    #[error("In this print statement:\n{0}")]
+    PrintStatementEvaluation(Box<Located<Error>>),
+    #[error("In this statement:\n{0}")]
+    ExpressionStatementEvaluation(Box<Located<Error>>),
 
-    #[error("Attempt to reference undeclared variable '{0}'")]
+    #[error("You haven't defined '{0}' yet")]
     UndeclaredVariable(String),
-    #[error("Invalid unary '{0}' on value '{1}'")]
+    #[error("I can't '{0}' a '{1}'")]
     InvalidUnary(Token, Value),
-    #[error("Invalid binary '{1}' between values '{0}' and '{2}'")]
+    #[error("I can't '{1}' a '{0}' and a '{2}'")]
     InvalidBinary(Value, Token, Value),
-    #[error("Attempt to divide '{0}' by zero")]
+    #[error("Divided '{0}' by zero!")]
     DivisionByZero(Value),
-    #[error("Invalid ternary condtion: expected boolean, found '{0}'")]
+    #[error("This is supposed to be true or false, but it was '{0}'")]
     InvalidTernary(Value),
-    #[error("Expected literal, found '{0}'")]
+    #[error("This is supposed to be a value, but it was a '{0}'")]
     InvalidLiteral(Token),
 }
 

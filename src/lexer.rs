@@ -6,13 +6,13 @@ use crate::util::{Errors, Locateable, Located, LocatedAt, Peekable};
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
-    #[error("Unterminated string")]
+    #[error("You forgot an end quote for your string")]
     UnterminatedString,
-    #[error("Unterminated multiline comment")]
+    #[error("You forgot your '*/'")]
     UnterminatedMultilineComment,
-    #[error("Number parsing error")]
+    #[error("This number doesnt look right: {0}")]
     NumberParseError(#[from] ParseFloatError),
-    #[error("Unrecognized character: '{0}'")]
+    #[error("What's '{0}' mean?")]
     UnrecognizedCharacer(char),
 }
 
