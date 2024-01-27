@@ -26,9 +26,11 @@ pub enum Error {
     TernaryEvaluation(Box<Located<Error>>),
 
     #[error("In this var statement:\n{0}")]
-    VarStatementEvaluation(Box<Located<Error>>),
+    VarEvaluation(Box<Located<Error>>),
     #[error("In this print statement:\n{0}")]
-    PrintStatementEvaluation(Box<Located<Error>>),
+    PrintEvaluation(Box<Located<Error>>),
+    #[error("In this block:\n{0}")]
+    BlockEvaluation(Box<Located<Error>>),
     #[error("In this statement:\n{0}")]
     ExpressionStatementEvaluation(Box<Located<Error>>),
 
@@ -179,7 +181,7 @@ impl Interpreter {
             Statement::Print(expression) => {
                 let result = self
                     .evaluate(expression)
-                    .with_err_at(Error::PrintStatementEvaluation, &location)?;
+                    .with_err_at(Error::PrintEvaluation, &location)?;
                 let repr = match result {
                     Value::String(s) => s,
                     value => format!("{value}"),
@@ -194,10 +196,19 @@ impl Interpreter {
                 let value = match maybe_initializer {
                     Some(expression) => self
                         .evaluate(expression)
-                        .with_err_at(Error::VarStatementEvaluation, &location)?,
+                        .with_err_at(Error::VarEvaluation, &location)?,
                     None => Value::Nil,
                 };
                 self.environment.top_entry(name).or_insert(value);
+            }
+            Statement::Block(statements) => {
+                self.environment.push();
+                for statement in statements {
+                    self.statement(statement)?;
+                }
+                self.environment
+                    .pop()
+                    .expect("Will always have just pushed a scope before executing");
             }
         }
         Ok(Value::Nil)
@@ -383,7 +394,8 @@ mod tests {
             .and_modify(|x| *x = Value::Number(40.0));
         env.entry("z".to_string()).or_insert(Value::Number(607.0));
         dbg!(&env);
-        env.top_entry("x".to_string()).or_insert(Value::Number(900.0));
+        env.top_entry("x".to_string())
+            .or_insert(Value::Number(900.0));
         dbg!(&env);
         env.pop().unwrap();
         env.entry("x".to_string())

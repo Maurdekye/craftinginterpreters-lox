@@ -1,6 +1,7 @@
 use std::{
     error::Error as StdError,
     fmt::Display,
+    iter::once,
     process::{ExitCode, Termination},
     vec,
 };
@@ -363,5 +364,19 @@ impl<E: Termination> Termination for Errors<E> {
             Some(e) => e.report(),
             None => ExitCode::SUCCESS,
         }
+    }
+}
+
+pub trait WrapErrors {
+    type Output;
+
+    fn errs(self) -> Self::Output;
+}
+
+impl<T, E> WrapErrors for Result<T, E> {
+    type Output = Result<T, Errors<E>>;
+
+    fn errs(self) -> Self::Output {
+        self.map_err(|err| once(err).collect())
     }
 }
