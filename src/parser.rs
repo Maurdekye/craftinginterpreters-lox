@@ -32,6 +32,8 @@ pub enum Error {
 
     #[error("Where's the variable name?")]
     MissingVarIdentifier,
+    #[error("You forgot a '}}'")]
+    MissingClosingBrace,
     #[error("You forgot a semicolon")]
     MissingSemicolon,
     #[error("That's not a variable name")]
@@ -46,9 +48,7 @@ pub enum Error {
     UnexpectedAssignmentOperator,
     #[error("This '{0}' doesn't make sense here, it's supposed to be used in some sort of binary expression")]
     UnexpectedBinaryOperator(Token),
-    #[error(
-        "This '{0}' doesn't make sense here, it's supposed to be part of a ternary expression"
-    )]
+    #[error("This '{0}' doesn't make sense here, it's supposed to be part of a ternary")]
     UnexpectedTernaryOperator(Token),
     #[error("You forgot a ':' after the true branch of your ternary expression")]
     MissingTernaryColon,
@@ -220,7 +220,7 @@ fn declaration(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
 ) -> StatementParseResult {
     match tokens.peek() {
-        Some(token_location @ Located { .. }) => {
+        Some(token_location) => {
             let location = token_location.location();
             match token_location.item {
                 Token::Var => {
@@ -267,13 +267,15 @@ fn var(
 
 fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> StatementParseResult {
     match tokens.peek() {
-        Some(located_token @ Located { .. }) => {
+        Some(located_token) => {
             let location = located_token.location();
             match located_token.item {
-                Token::Print => print(tokens, &location)
-                    .with_err_located_at(Error::PrintParse, &location),
-                Token::LeftBrace => block(tokens, &location)
-                    .with_err_located_at(Error::BlockParse, &location),
+                Token::Print => {
+                    print(tokens, &location).with_err_located_at(Error::PrintParse, &location)
+                }
+                Token::LeftBrace => {
+                    block(tokens, &location).with_err_located_at(Error::BlockParse, &location)
+                }
                 _ => expression_statement(tokens)
                     .with_err_located_at(Error::ExpressionStatementParse, &location),
             }
@@ -301,9 +303,13 @@ fn block(
     let mut errors = Errors::new();
     loop {
         match tokens.peek() {
-            Some(Located { item: token, .. }) => match token {
+            Some(located_token @ Located { item: token, .. }) => match token {
                 Token::RightBrace => {
                     tokens.next();
+                    break;
+                }
+                Token::Eof => {
+                    errors.push(Error::MissingClosingBrace.located_at(located_token));
                     break;
                 }
                 _ => match declaration(tokens) {
@@ -315,7 +321,7 @@ fn block(
                 },
             },
             None => {
-                errors.push(Error::UnexpectedEndOfTokenStream.unlocated());
+                errors.push(Error::UnexpectedEndOfTokenStream.located_at(block_location));
                 break;
             }
         }
@@ -392,8 +398,8 @@ fn ternary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
     }
     let mut expression = binary(tokens)?;
     while let Some(operator) = tokens.next_if(|token| matches!(token.item, Token::QuestionMark)) {
-        expression = ternary_body(tokens, expression)
-            .with_err_located_at(Error::TernaryParse, &operator)?;
+        expression =
+            ternary_body(tokens, expression).with_err_located_at(Error::TernaryParse, &operator)?;
     }
     Ok(expression)
 }

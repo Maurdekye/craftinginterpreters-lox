@@ -208,7 +208,7 @@ impl Interpreter {
                 }
                 self.environment
                     .pop()
-                    .expect("Will always have just pushed a scope before executing");
+                    .expect("Will always have just pushed a scope");
             }
         }
         Ok(Value::Nil)
