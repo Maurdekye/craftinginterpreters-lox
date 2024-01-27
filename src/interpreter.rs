@@ -3,6 +3,9 @@ use std::{
     fmt::Display,
 };
 
+use polonius_the_crab::{exit_polonius, polonius, polonius_return};
+use replace_with::replace_with_or_abort;
+
 use crate::{
     lexer::Token,
     parser::{Expression, Statement},
@@ -89,14 +92,65 @@ impl TryFrom<Token> for Value {
     }
 }
 
+pub enum Environment {
+    Global(HashMap<String, Value>),
+    Scope(HashMap<String, Value>, Box<Environment>),
+}
+
+impl Environment {
+    pub fn new() -> Self {
+        Self::Global(HashMap::new())
+    }
+
+    pub fn entry(&mut self, key: String) -> Entry<'_, String, Value> {
+        let (mut env, outer_scope) = match self {
+            Environment::Global(env) => return env.entry(key),
+            Environment::Scope(env, outer_scope) => (env, outer_scope),
+        };
+        let key = polonius!(|env| -> Entry<'polonius, String, Value> {
+            match env.entry(key) {
+                entry @ Entry::Occupied(_) => polonius_return!(entry),
+                Entry::Vacant(vacant) => exit_polonius!(vacant.into_key()),
+            }
+        });
+        let key = match outer_scope.entry(key) {
+            entry @ Entry::Occupied(_) => return entry,
+            Entry::Vacant(vacant) => vacant.into_key(),
+        };
+        return env.entry(key);
+    }
+
+    pub fn push(&mut self) {
+        replace_with_or_abort(self, |old_self| {
+            Environment::Scope(HashMap::new(), Box::new(old_self))
+        })
+    }
+
+    pub fn pop(&mut self) -> Result<(), AtGlobalScopeError> {
+        let mut result = Ok(());
+        replace_with_or_abort(self, |old_self| match old_self {
+            Environment::Global(_) => {
+                result = Err(AtGlobalScopeError);
+                old_self
+            }
+            Environment::Scope(_, outer_scope) => *outer_scope,
+        });
+        result
+    }
+}
+
+#[derive(Clone, Debug, ThisError)]
+#[error("Already at global scope")]
+pub struct AtGlobalScopeError;
+
 pub struct Interpreter {
-    environment: HashMap<String, Value>,
+    environment: Environment,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
         Self {
-            environment: HashMap::new(),
+            environment: Environment::new(),
         }
     }
 
@@ -137,7 +191,7 @@ impl Interpreter {
                         .with_err_at(Error::VarStatementEvaluation, &location)?,
                     None => Value::Nil,
                 };
-                self.environment.insert(name, value);
+                self.environment.entry(name).and_modify(|e| *e = value);
             }
         }
         Ok(Value::Nil)
@@ -177,7 +231,10 @@ impl Interpreter {
     }
 
     fn variable(&mut self, name: String) -> Result<Value, String> {
-        self.environment.get(&name).cloned().ok_or(name)
+        match self.environment.entry(name) {
+            Entry::Occupied(occupied) => Ok(occupied.get().clone()),
+            Entry::Vacant(vacant) => Err(vacant.into_key()),
+        }
     }
 
     fn assignment(

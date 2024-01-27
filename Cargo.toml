@@ -7,4 +7,6 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.4.18", features = ["derive"] }
+polonius-the-crab = "0.4.1"
+replace_with = "0.1.7"
 thiserror = "1.0.56"

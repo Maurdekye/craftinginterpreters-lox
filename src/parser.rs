@@ -314,7 +314,7 @@ fn assignment(
         return Err(Error::UnexpectedAssignmentOperator.located_at(&operator));
     }
     let mut expression = ternary(tokens)?;
-    if let Some(_eq_token) = tokens.next_if(|token| matches!(token.item, Token::Equal)) {
+    if let Some(_) = tokens.next_if(|token| matches!(token.item, Token::Equal)) {
         let target_location = expression.location();
         expression = assignment_expression(tokens, expression)
             .with_err_located_at(Error::AssignmentExpressionParse, &target_location)?;
