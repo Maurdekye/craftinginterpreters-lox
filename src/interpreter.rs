@@ -92,6 +92,7 @@ impl TryFrom<Token> for Value {
     }
 }
 
+#[derive(Debug)]
 pub enum Environment {
     Global(HashMap<String, Value>),
     Scope(HashMap<String, Value>, Box<Environment>),
@@ -118,6 +119,11 @@ impl Environment {
             Entry::Vacant(vacant) => vacant.into_key(),
         };
         return env.entry(key);
+    }
+
+    pub fn top_entry(&mut self, key: String) -> Entry<'_, String, Value> {
+        let (Environment::Global(env) | Environment::Scope(env, _)) = self;
+        env.entry(key)
     }
 
     pub fn push(&mut self) {
@@ -191,7 +197,7 @@ impl Interpreter {
                         .with_err_at(Error::VarStatementEvaluation, &location)?,
                     None => Value::Nil,
                 };
-                self.environment.entry(name).and_modify(|e| *e = value);
+                self.environment.top_entry(name).or_insert(value);
             }
         }
         Ok(Value::Nil)
@@ -360,5 +366,28 @@ impl Interpreter {
         } else {
             self.evaluate(false_branch_expr)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Environment, Value};
+
+    #[test]
+    fn test() {
+        let mut env = Environment::new();
+        env.entry("x".to_string()).or_insert(Value::Number(5.0));
+        env.entry("y".to_string()).or_insert(Value::Number(10.0));
+        env.push();
+        env.entry("x".to_string())
+            .and_modify(|x| *x = Value::Number(40.0));
+        env.entry("z".to_string()).or_insert(Value::Number(607.0));
+        dbg!(&env);
+        env.top_entry("x".to_string()).or_insert(Value::Number(900.0));
+        dbg!(&env);
+        env.pop().unwrap();
+        env.entry("x".to_string())
+            .and_modify(|x| *x = Value::Number(18.0));
+        dbg!(&env);
     }
 }
