@@ -163,10 +163,7 @@ impl Interpreter {
         }
     }
 
-    pub fn interpret(
-        &mut self,
-        statements: Vec<Located<Statement>>,
-    ) -> Result<(), Located<Error>> {
+    pub fn interpret(&mut self, statements: Vec<Located<Statement>>) -> Result<(), Located<Error>> {
         for statement in statements {
             self.statement(statement)?;
         }
@@ -180,9 +177,9 @@ impl Interpreter {
                 let result = self
                     .evaluate(expression)
                     .with_err_at(Error::PrintEvaluation, &location)?;
-                let repr = match result.into_owned() {
-                    Value::String(s) => s,
-                    value => format!("{value}"),
+                let repr: Cow<'_, String> = match result.borrow() {
+                    Value::String(s) => Cow::Borrowed(s),
+                    value => Cow::Owned(format!("{value}")),
                 };
                 println!("{repr}");
             }
@@ -195,19 +192,20 @@ impl Interpreter {
                     Some(expression) => self
                         .evaluate(expression)
                         .with_err_at(Error::VarEvaluation, &location)?
-                        .into_owned(),
+                        .into_owned(), // own must occur in order to store the value
                     None => Value::Nil,
                 };
                 self.environment.top_entry(name).insert(value);
             }
             Statement::Block(statements) => {
                 self.environment.push();
-                for statement in statements {
-                    self.statement(statement)?;
-                }
+                let result = self
+                    .block(statements)
+                    .with_err_at(Error::BlockEvaluation, &location);
                 self.environment
                     .pop()
                     .expect("Will always have just pushed a scope");
+                result?;
             }
         }
         Ok(())
@@ -255,20 +253,27 @@ impl Interpreter {
         }
     }
 
+    fn block(&mut self, statements: Vec<Located<Statement>>) -> Result<(), Located<Error>> {
+        for statement in statements {
+            self.statement(statement)?;
+        }
+        Ok(())
+    }
+
     fn assignment<'a>(
         &'a mut self,
         name: Located<String>,
         expression: Located<Expression>,
     ) -> Result<Cow<'a, Value>, Located<Error>> {
         let (location, name) = name.split();
-        let value = self.evaluate(expression)?.into_owned();
+        let value = self.evaluate(expression)?.into_owned(); // own must occur in order to store the value
         match self.environment.entry(name) {
             Entry::Vacant(vacant) => {
                 Err(Error::UndeclaredVariable(vacant.into_key()).at(&location))
             }
             Entry::Occupied(mut entry) => {
                 entry.insert(value);
-                Ok(Cow::Borrowed(entry.into_mut()))
+                Ok(Cow::Borrowed(entry.into_mut())) // everything is cows so that i can write this line here :)
             }
         }
     }
@@ -284,7 +289,7 @@ impl Interpreter {
             (Token::Minus, Value::Number(value)) => Ok(Value::Number(-value)),
             (Token::Bang, Value::False | Value::Nil) => Ok(Value::True),
             (Token::Bang, Value::True) => Ok(Value::False),
-            (unary, _) => Err(Error::InvalidUnary(unary, value.into_owned()).at(&location)), // error contents must be owned 
+            (unary, _) => Err(Error::InvalidUnary(unary, value.into_owned()).at(&location)), // error contents must be owned
         }
     }
 
@@ -304,7 +309,7 @@ impl Interpreter {
             (Value::False | Value::Nil, Token::And) | (Value::True, Token::Or) => {
                 return Ok(Cow::Owned(lhs_value.into_owned())); // this is a cheap own, because the value can only ever be False, True, or Nil
             }
-            _ => lhs_value.into_owned(), // this own may not be cheap, but it is unavoidable 😔
+            _ => lhs_value.into_owned(), // this own may not be cheap, but it is unavoidable, because we must also borrow rhs 😔
         };
 
         let rhs_value = self.evaluate(rhs_expr)?;
@@ -381,7 +386,10 @@ impl Interpreter {
 
             // invalid
             (_, operator, _) => {
-                Err(Error::InvalidBinary(lhs_value, operator, rhs_value.into_owned()).at(&binary_location))  // error contents must be owned
+                Err(
+                    Error::InvalidBinary(lhs_value, operator, rhs_value.into_owned())
+                        .at(&binary_location),
+                ) // error contents must be owned
             }
         }
     }
@@ -398,7 +406,11 @@ impl Interpreter {
         let condition_bool = match condition_value.borrow() {
             Value::True => true,
             Value::False => false,
-            _ => return Err(Error::InvalidTernary(condition_value.into_owned()).at(&condition_location)), // error contents must be owned
+            _ => {
+                return Err(
+                    Error::InvalidTernary(condition_value.into_owned()).at(&condition_location)
+                )
+            } // error contents must be owned
         };
 
         if condition_bool {
