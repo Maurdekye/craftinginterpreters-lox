@@ -36,14 +36,10 @@ pub enum Error {
     #[error("In this assignment:\n{0}")]
     AssignmentParse(Box<MaybeLocated<Error>>),
 
-    #[error("You forgot a '('")]
-    MissingOpenParen,
-    #[error("You forgot a ')'")]
-    MissingClosingParen,
+    #[error("Was looking for a '{0}', but got a '{1}' instead")]
+    UndesiredToken(Token, Token),
     #[error("Where's the variable name?")]
     MissingVarIdentifier,
-    #[error("You forgot a '}}'")]
-    MissingClosingBrace,
     #[error("You forgot a semicolon")]
     MissingSemicolon,
     #[error("That's not a variable name")]
@@ -60,8 +56,6 @@ pub enum Error {
     UnexpectedBinaryOperator(Token),
     #[error("This '{0}' doesn't make sense here, it's supposed to be part of a ternary")]
     UnexpectedTernaryOperator(Token),
-    #[error("You forgot a ':' after the true branch of your ternary expression")]
-    MissingTernaryColon,
 }
 
 #[derive(Clone, Debug)]
@@ -191,7 +185,7 @@ fn synchronize(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) {
 fn consume(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
     pred: impl FnOnce(&Token) -> bool,
-    error_factory: impl FnOnce() -> Error,
+    error_factory: impl FnOnce(Token) -> Error,
 ) -> Result<Location, MaybeLocated<Error>> {
     match tokens.peek() {
         Some(located_token @ Located { item: token, .. }) => {
@@ -200,11 +194,21 @@ fn consume(
                 tokens.next();
                 Ok(location)
             } else {
-                Err(error_factory().located_at(&location))
+                Err(error_factory(token.clone()).located_at(&location))
             }
         }
-        None => Err(error_factory().unlocated()),
+        None => Err(error_factory(Token::Eof).unlocated()),
     }
+}
+
+macro_rules! consume_token {
+    ($tokens:expr, $token:ident) => {
+        consume(
+            $tokens,
+            |t| matches!(t, $crate::lexer::Token::$token),
+            |t| $crate::parser::Error::UndesiredToken($crate::lexer::Token::$token, t),
+        )
+    };
 }
 
 fn consume_semicolon(
@@ -213,7 +217,7 @@ fn consume_semicolon(
     consume(
         tokens,
         |t| matches!(t, Token::Semicolon),
-        || Error::MissingSemicolon,
+        |_| Error::MissingSemicolon,
     )
 }
 
@@ -304,12 +308,12 @@ fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Sta
                     tokens.next();
                     consume_semicolon(tokens)?;
                     Ok(Statement::Break.at(location))
-                },
+                }
                 Token::Continue => {
                     tokens.next();
                     consume_semicolon(tokens)?;
                     Ok(Statement::Continue.at(location))
-                },
+                }
                 Token::If => {
                     if_statement(tokens, location).with_err_located_at(Error::IfParse, location)
                 }
@@ -362,11 +366,7 @@ fn for_statement(
     location: &impl Locateable,
 ) -> StatementParseResult {
     tokens.next();
-    consume(
-        tokens,
-        |t| matches!(t, Token::LeftParen),
-        || Error::MissingOpenParen,
-    )?;
+    consume_token!(tokens, LeftParen)?;
 
     // parse individual pieces
     let initializer = match tokens.peek() {
@@ -388,11 +388,7 @@ fn for_statement(
         .is_none()
     {
         let condition = Some(expression(tokens)?);
-        consume(
-            tokens,
-            |t| matches!(t, Token::Semicolon),
-            || Error::MissingSemicolon,
-        )?;
+        consume_semicolon(tokens)?;
         condition
     } else {
         None
@@ -402,11 +398,7 @@ fn for_statement(
         .is_none()
     {
         let increment = Some(expression(tokens)?);
-        consume(
-            tokens,
-            |t| matches!(t, Token::RightParen),
-            || Error::MissingClosingParen,
-        )?;
+        consume_token!(tokens, RightParen)?;
         increment
     } else {
         None
@@ -455,7 +447,10 @@ fn block(
                     break;
                 }
                 Token::Eof => {
-                    errors.push(Error::MissingClosingBrace.located_at(located_token));
+                    errors.push(
+                        Error::UndesiredToken(Token::RightBrace, Token::Eof)
+                            .located_at(located_token),
+                    );
                     break;
                 }
                 _ => match declaration(tokens) {
@@ -525,11 +520,7 @@ fn ternary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expre
         expression: Located<Expression>,
     ) -> ExpressionParseResult {
         let true_expr = binary(tokens)?;
-        consume(
-            tokens,
-            |t| matches!(t, Token::Colon),
-            || Error::MissingTernaryColon,
-        )?;
+        consume_token!(tokens, Colon)?;
         let false_expr = binary(tokens)?;
         let location = expression.location();
         Ok(
