@@ -466,32 +466,38 @@ fn binary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Expres
     }
     binary_parse(
         tokens,
-        |t| matches!(t, Token::And | Token::Or),
+        |t| matches!(t, Token::Or),
         |tokens| {
             binary_parse(
                 tokens,
-                |t| matches!(t, Token::EqualEqual | Token::BangEqual),
+                |t| matches!(t, Token::And),
                 |tokens| {
                     binary_parse(
                         tokens,
-                        |t| {
-                            matches!(
-                                t,
-                                Token::Greater
-                                    | Token::GreaterEqual
-                                    | Token::Less
-                                    | Token::LessEqual
-                            )
-                        },
+                        |t| matches!(t, Token::EqualEqual | Token::BangEqual),
                         |tokens| {
                             binary_parse(
                                 tokens,
-                                |t| matches!(t, Token::Minus | Token::Plus),
+                                |t| {
+                                    matches!(
+                                        t,
+                                        Token::Greater
+                                            | Token::GreaterEqual
+                                            | Token::Less
+                                            | Token::LessEqual
+                                    )
+                                },
                                 |tokens| {
                                     binary_parse(
                                         tokens,
-                                        |t| matches!(t, Token::Slash | Token::Star),
-                                        unary,
+                                        |t| matches!(t, Token::Minus | Token::Plus),
+                                        |tokens| {
+                                            binary_parse(
+                                                tokens,
+                                                |t| matches!(t, Token::Slash | Token::Star),
+                                                unary,
+                                            )
+                                        },
                                     )
                                 },
                             )
