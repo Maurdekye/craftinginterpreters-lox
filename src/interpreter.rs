@@ -203,6 +203,7 @@ impl Interpreter {
         let location = &statement.location();
         match &statement.item {
             Statement::Break => return Err(Error::Break.at(location)),
+            Statement::Continue => return Err(Error::Continue.at(location)),
             Statement::If(condition, true_branch, false_branch) => {
                 self.if_statement(condition, true_branch.as_ref(), false_branch.as_ref())
                     .with_err_at(Error::IfEvaluation, location)?;

@@ -114,6 +114,7 @@ pub enum Statement {
         Box<Option<Located<Statement>>>,
     ),
     Break,
+    Continue,
     While(Located<Expression>, Box<Located<Statement>>),
     Expression(Located<Expression>),
     Var(String, Option<Located<Expression>>),
@@ -153,6 +154,9 @@ impl Display for Statement {
             }
             Statement::Break => {
                 writeln!(f, "break")
+            }
+            Statement::Continue => {
+                writeln!(f, "continue")
             }
         }
     }
@@ -299,6 +303,10 @@ fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Sta
                 Token::Break => {
                     consume_semicolon(tokens)?;
                     Ok(Statement::Break.at(location))
+                },
+                Token::Continue => {
+                    consume_semicolon(tokens)?;
+                    Ok(Statement::Continue.at(location))
                 },
                 Token::If => {
                     if_statement(tokens, location).with_err_located_at(Error::IfParse, location)
