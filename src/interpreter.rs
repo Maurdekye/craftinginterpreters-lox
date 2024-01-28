@@ -287,7 +287,7 @@ impl Interpreter {
                     item: Error::Continue,
                     ..
                 }) => continue,
-                _ => (),
+                result => result?,
             }
         }
         Ok(())
