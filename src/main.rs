@@ -5,11 +5,12 @@ use std::{
     process::{ExitCode, Termination},
 };
 
+use interpreter::Value;
 use lexer::Tokens;
 use thiserror::Error as ThisError;
 
 use clap::Parser;
-use util::{ErrorInto, Errors, Located, MaybeLocated};
+use util::{ErrorInto, Errors, Located, MaybeLocated, Peekable};
 
 use crate::{interpreter::Interpreter, util::ErrorsInto};
 
@@ -75,6 +76,26 @@ fn run_with(source: String, interpreter: &mut Interpreter) -> Result<(), Errors<
     errors.empty_ok(())
 }
 
+fn eval_with(source: String, interpreter: &mut Interpreter) -> Result<Value, Errors<Error>> {
+    let mut errors = Errors::new();
+    let mut raw_tokens = Tokens::from(&*source);
+    let tokens = iter::from_fn(|| loop {
+        match raw_tokens.next() {
+            Some(Err(err)) => errors.push(err),
+            Some(Ok(token)) => return Some(token),
+            None => return None,
+        }
+    });
+    let mut tokens = Peekable::new(tokens);
+    let Some(expression) = parser::expression(&mut tokens).error_into(&mut errors) else {
+        return Err(errors);
+    };
+    let Some(value) = interpreter.evaluate(expression).error_into(&mut errors) else {
+        return Err(errors);
+    };
+    errors.empty_ok(value.into_owned())
+}
+
 fn run(source: String) -> Result<(), Errors<Error>> {
     run_with(source, &mut Interpreter::new())
 }
@@ -93,7 +114,6 @@ fn _main() -> Result<(), RootError> {
     let args = Args::parse();
 
     match (args.file, args.source) {
-        
         // run code inline
         (_, Some(source)) => {
             run(source)?;
@@ -115,7 +135,12 @@ fn _main() -> Result<(), RootError> {
                     // ctrl+D or ctrl+Z
                     break;
                 };
-                match run_with(line?, &mut interpreter) {
+                let line = line?;
+                match if line.trim().ends_with(';') {
+                    run_with(line, &mut interpreter)
+                } else {
+                    eval_with(line, &mut interpreter).map(|val| println!("{val}"))
+                } {
                     Ok(_) => (),
                     Err(errs) => println!("{errs}"),
                 }

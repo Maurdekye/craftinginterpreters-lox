@@ -211,7 +211,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn evaluate(&mut self, expression: Located<Expression>) -> Result<Cow<Value>, Located<Error>> {
+    pub fn evaluate(&mut self, expression: Located<Expression>) -> Result<Cow<Value>, Located<Error>> {
         let location = expression.location();
         match expression.item {
             Expression::Literal(literal_token) => self

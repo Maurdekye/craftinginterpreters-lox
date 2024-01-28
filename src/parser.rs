@@ -338,7 +338,7 @@ fn expression_statement(
     Ok(Statement::Expression(expr).at(&location))
 }
 
-fn expression(
+pub fn expression(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
 ) -> ExpressionParseResult {
     assignment(tokens)
