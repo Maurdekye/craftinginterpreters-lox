@@ -25,6 +25,8 @@ pub enum Error {
     BinaryEvaluation(Box<Located<Error>>),
     #[error("In this ternary:\n{0}")]
     TernaryEvaluation(Box<Located<Error>>),
+    #[error("Trying to read this variable:\n{0}")]
+    VariableResolution(Box<Error>),
 
     #[error("In this var statement:\n{0}")]
     VarEvaluation(Box<Located<Error>>),
@@ -37,6 +39,8 @@ pub enum Error {
 
     #[error("You haven't defined '{0}' yet")]
     UndeclaredVariable(String),
+    #[error("'{0}' isn't initialized")]
+    UninitializedVariable(String),
     #[error("I can't '{0}' a '{1}'")]
     InvalidUnary(Token, Value),
     #[error("I can't '{1}' a '{0}' and a '{2}'")]
@@ -56,6 +60,7 @@ pub enum Value {
     True,
     False,
     Nil,
+    Unititialized,
 }
 
 impl From<bool> for Value {
@@ -76,6 +81,7 @@ impl Display for Value {
             Value::True => write!(f, "true"),
             Value::False => write!(f, "false"),
             Value::Nil => write!(f, "nil"),
+            Value::Unititialized => write!(f, "uninitialized"),
         }
     }
 }
@@ -193,7 +199,7 @@ impl Interpreter {
                         .evaluate(expression)
                         .with_err_at(Error::VarEvaluation, &location)?
                         .into_owned(), // own must occur in order to store the value
-                    None => Value::Nil,
+                    None => Value::Unititialized,
                 };
                 self.environment.top_entry(name).insert(value);
             }
@@ -211,7 +217,10 @@ impl Interpreter {
         Ok(())
     }
 
-    pub fn evaluate(&mut self, expression: Located<Expression>) -> Result<Cow<Value>, Located<Error>> {
+    pub fn evaluate(
+        &mut self,
+        expression: Located<Expression>,
+    ) -> Result<Cow<Value>, Located<Error>> {
         let location = expression.location();
         match expression.item {
             Expression::Literal(literal_token) => self
@@ -220,7 +229,7 @@ impl Interpreter {
                 .with_err_at(Error::InvalidLiteral, &location),
             Expression::Variable(name) => self
                 .variable(name)
-                .with_err_at(Error::UndeclaredVariable, &location),
+                .with_err_at(Error::VariableResolution, &location),
             Expression::Assignment(name, sub_expression) => self
                 .assignment(name, sub_expression.as_deref())
                 .with_err_at(Error::AssignmentEvaluation, &location),
@@ -246,10 +255,13 @@ impl Interpreter {
         literal.item.try_into()
     }
 
-    fn variable(&mut self, name: String) -> Result<Cow<Value>, String> {
+    fn variable(&mut self, name: String) -> Result<Cow<Value>, Error> {
         match self.environment.entry(name) {
-            Entry::Occupied(occupied) => Ok(Cow::Borrowed(occupied.into_mut())),
-            Entry::Vacant(vacant) => Err(vacant.into_key()),
+            Entry::Occupied(occupied) => match occupied.get() {
+                Value::Unititialized => Err(Error::UninitializedVariable(occupied.key().clone())), // errors must be owned
+                _ => Ok(Cow::Borrowed(occupied.into_mut())),
+            },
+            Entry::Vacant(vacant) => Err(Error::UndeclaredVariable(vacant.into_key())), // errors must be owned
         }
     }
 

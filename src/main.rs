@@ -136,11 +136,12 @@ fn _main() -> Result<(), RootError> {
                     break;
                 };
                 let line = line?;
-                match if line.trim().ends_with(';') {
+                let result = if line.trim().ends_with(';') {
                     run_with(line, &mut interpreter)
                 } else {
                     eval_with(line, &mut interpreter).map(|val| println!("{val}"))
-                } {
+                };
+                match result {
                     Ok(_) => (),
                     Err(errs) => println!("{errs}"),
                 }
