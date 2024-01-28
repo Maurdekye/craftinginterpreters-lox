@@ -4,7 +4,7 @@ use std::{
     fmt::Display,
 };
 
-use polonius_the_crab::{exit_polonius, polonius, polonius_return};
+use polonius_the_crab::{exit_polonius, polonius, polonius_return, polonius_try};
 use replace_with::replace_with_or_abort;
 
 use crate::{
@@ -77,14 +77,11 @@ impl From<bool> for Value {
     }
 }
 
-impl TryInto<bool> for Value {
-    type Error = Value;
-
-    fn try_into(self) -> Result<bool, Self::Error> {
+impl Into<bool> for &Value {
+    fn into(self) -> bool {
         match self {
-            Self::True => Ok(true),
-            Self::False | Self::Nil => Ok(false),
-            _ => Err(self),
+            Value::False | Value::Nil => false,
+            _ => true,
         }
     }
 }
@@ -243,13 +240,9 @@ impl Interpreter {
         true_branch: Located<Statement>,
         false_branch: Option<Located<Statement>>,
     ) -> Result<(), Located<Error>> {
-        let condition_location = condition.location();
         let condition_value = self.evaluate(condition)?;
-        let condition_bool = condition_value
-            .into_owned() // own must occur in order to return as an error
-            .try_into()
-            .with_err_at(Error::InvalidIfCondition, &condition_location)?;
-        if condition_bool {
+        let condition_bool: &Value = condition_value.borrow();
+        if condition_bool.into() {
             self.statement(true_branch)?;
         } else if let Some(false_branch) = false_branch {
             self.statement(false_branch)?;
@@ -354,27 +347,35 @@ impl Interpreter {
         let binary_location = binary.location();
         let lhs_location = lhs_expr.location();
 
-        let lhs_value = self.evaluate(lhs_expr)?;
+        let mut this = self;
 
-        // match short circuit boolean operations before evaluating right hand side
-        let lhs_value = match (lhs_value.borrow(), &binary.item) {
-            (Value::False | Value::Nil, Token::And) | (Value::True, Token::Or) => {
-                return Ok(Cow::Owned(lhs_value.into_owned())); // this is a cheap own, because the value can only ever be False, True, or Nil
+        let (lhs_boolean_val, lhs_value) = polonius!(|this| -> Result<Cow<'polonius, Value>, Located<Error>> {
+            let lhs_value = polonius_try!(this.evaluate(lhs_expr));
+
+            // match short circuit boolean operations before evaluating right hand side
+            let lhs_borrow: &Value = lhs_value.borrow();
+            match (lhs_borrow.into(), &binary.item) {
+                (false, Token::And) | (true, Token::Or) => {
+                    polonius_return!(Ok(lhs_value));
+                }
+                (lhs_boolean_val, _) => exit_polonius!((lhs_boolean_val, lhs_value.into_owned())), // this own may not be cheap, but it is unavoidable, because we must also borrow rhs 😔
+            };
+        });
+
+        let rhs_value = this.evaluate(rhs_expr)?;
+
+        match (lhs_boolean_val, &binary.item) {
+            // boolean
+            (true, Token::And) | (false, Token::Or) => {
+                return Ok(rhs_value);
             }
-            _ => lhs_value.into_owned(), // this own may not be cheap, but it is unavoidable, because we must also borrow rhs 😔
-        };
-
-        let rhs_value = self.evaluate(rhs_expr)?;
+            _ => ()
+        }
 
         match (lhs_value.borrow(), binary.item, rhs_value.borrow()) {
             // equality
             (lhs, Token::EqualEqual, rhs) => Ok(Cow::Owned((lhs == rhs).into())),
             (lhs, Token::BangEqual, rhs) => Ok(Cow::Owned((lhs != rhs).into())),
-
-            // boolean
-            (Value::True, Token::And, _) | (Value::False | Value::Nil, Token::Or, _) => {
-                Ok(rhs_value)
-            }
 
             // comparison
             (Value::Number(lhs), Token::Less, Value::Number(rhs)) => {
@@ -452,15 +453,9 @@ impl Interpreter {
         true_branch_expr: Located<Expression>,
         false_branch_expr: Located<Expression>,
     ) -> Result<Cow<Value>, Located<Error>> {
-        let condition_location = condition_expr.location();
-
         let condition_value = self.evaluate(condition_expr)?;
-        let condition_bool = condition_value
-            .into_owned() // own must occur in order to return as an error
-            .try_into()
-            .with_err_at(Error::InvalidTernary, &condition_location)?;
-
-        if condition_bool {
+        let condition_bool: &Value = condition_value.borrow();
+        if condition_bool.into() {
             self.evaluate(true_branch_expr)
         } else {
             self.evaluate(false_branch_expr)
