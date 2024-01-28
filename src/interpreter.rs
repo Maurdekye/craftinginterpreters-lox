@@ -298,10 +298,10 @@ impl Interpreter {
     fn variable(&mut self, name: String) -> Result<Cow<Value>, Error> {
         match self.environment.entry(name) {
             Entry::Occupied(occupied) => match occupied.get() {
-                Value::Unititialized => Err(Error::UninitializedVariable(occupied.key().clone())), // errors must be owned (no `OccupiedEntry::into_key` 🙁)
+                Value::Unititialized => Err(Error::UninitializedVariable(occupied.key().clone())), // error contents must be owned (no `OccupiedEntry::into_key` 🙁)
                 _ => Ok(Cow::Borrowed(occupied.into_mut())),
             },
-            Entry::Vacant(vacant) => Err(Error::UndeclaredVariable(vacant.into_key())), // errors must be owned
+            Entry::Vacant(vacant) => Err(Error::UndeclaredVariable(vacant.into_key())),
         }
     }
 
@@ -318,7 +318,7 @@ impl Interpreter {
             }
             Entry::Occupied(mut entry) => {
                 entry.insert(value);
-                Ok(Cow::Borrowed(entry.into_mut())) // everything is cows so that i can write this line here :)
+                Ok(Cow::Borrowed(entry.into_mut())) // everything is cows so that i can write this line here :>
             }
         }
     }
@@ -332,8 +332,10 @@ impl Interpreter {
         let value = self.evaluate(unary_expr)?;
         match (unary.item, value.borrow()) {
             (Token::Minus, Value::Number(value)) => Ok(Value::Number(-value)),
-            (Token::Bang, Value::False | Value::Nil) => Ok(Value::True),
-            (Token::Bang, Value::True) => Ok(Value::False),
+            (Token::Bang, operand) => {
+                let bool_value: bool = operand.into();
+                Ok((!bool_value).into())
+            }
             (unary, _) => Err(Error::InvalidUnary(unary, value.into_owned()).at(&location)), // error contents must be owned
         }
     }
@@ -347,29 +349,30 @@ impl Interpreter {
         let binary_location = binary.location();
         let lhs_location = lhs_expr.location();
 
-        let mut this = self;
+        let mut this = self; // cannot use polonius_the_crab on `self`
 
-        let (lhs_boolean_val, lhs_value) = polonius!(|this| -> Result<Cow<'polonius, Value>, Located<Error>> {
-            let lhs_value = polonius_try!(this.evaluate(lhs_expr));
+        let (lhs_truthiness, lhs_value) =
+            polonius!(|this| -> Result<Cow<'polonius, Value>, Located<Error>> {
+                let lhs_value = polonius_try!(this.evaluate(lhs_expr));
 
-            // match short circuit boolean operations before evaluating right hand side
-            let lhs_borrow: &Value = lhs_value.borrow();
-            match (lhs_borrow.into(), &binary.item) {
-                (false, Token::And) | (true, Token::Or) => {
-                    polonius_return!(Ok(lhs_value));
-                }
-                (lhs_boolean_val, _) => exit_polonius!((lhs_boolean_val, lhs_value.into_owned())), // this own may not be cheap, but it is unavoidable, because we must also borrow rhs 😔
-            };
-        });
+                // match short circuit boolean operations before evaluating right hand side
+                let lhs_borrow: &Value = lhs_value.borrow();
+                match (lhs_borrow.into(), &binary.item) {
+                    (false, Token::And) | (true, Token::Or) => {
+                        polonius_return!(Ok(lhs_value));
+                    }
+                    (lhs_truthiness, _) => exit_polonius!((lhs_truthiness, lhs_value.into_owned())), // this own may not be cheap, but it is unavoidable, because we must also borrow rhs 😔
+                };
+            });
 
         let rhs_value = this.evaluate(rhs_expr)?;
 
-        match (lhs_boolean_val, &binary.item) {
-            // boolean
+        // finish short circuit boolean evaluation
+        match (lhs_truthiness, &binary.item) {
             (true, Token::And) | (false, Token::Or) => {
                 return Ok(rhs_value);
             }
-            _ => ()
+            _ => (),
         }
 
         match (lhs_value.borrow(), binary.item, rhs_value.borrow()) {
