@@ -296,7 +296,10 @@ fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Sta
         Some(located_token) => {
             let location = &located_token.location();
             match located_token.item {
-                Token::Break => Ok(Statement::Break.at(location)),
+                Token::Break => {
+                    consume_semicolon(tokens)?;
+                    Ok(Statement::Break.at(location))
+                },
                 Token::If => {
                     if_statement(tokens, location).with_err_located_at(Error::IfParse, location)
                 }
