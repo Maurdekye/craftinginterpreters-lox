@@ -301,10 +301,12 @@ fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Sta
             let location = &located_token.location();
             match located_token.item {
                 Token::Break => {
+                    tokens.next();
                     consume_semicolon(tokens)?;
                     Ok(Statement::Break.at(location))
                 },
                 Token::Continue => {
+                    tokens.next();
                     consume_semicolon(tokens)?;
                     Ok(Statement::Continue.at(location))
                 },
