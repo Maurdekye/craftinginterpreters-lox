@@ -195,20 +195,20 @@ impl Interpreter {
     }
 
     fn statement(&mut self, statement: &Located<Statement>) -> Result<(), Located<Error>> {
-        let location = statement.location();
+        let location = &statement.location();
         match &statement.item {
             Statement::If(condition, true_branch, false_branch) => {
                 self.if_statement(condition, true_branch.as_ref(), false_branch.as_deref())
-                    .with_err_at(Error::IfEvaluation, &location)?;
+                    .with_err_at(Error::IfEvaluation, location)?;
             }
             Statement::While(condition, body) => {
-                self.while_statement(&condition, &*body)
-                    .with_err_at(Error::WhileEvaluation, &location)?;
+                self.while_statement(condition, body.as_ref())
+                    .with_err_at(Error::WhileEvaluation, location)?;
             }
             Statement::Print(expression) => {
                 let result = self
-                    .evaluate(&expression)
-                    .with_err_at(Error::PrintEvaluation, &location)?;
+                    .evaluate(expression)
+                    .with_err_at(Error::PrintEvaluation, location)?;
                 let repr: Cow<'_, String> = match result.borrow() {
                     Value::String(s) => Cow::Borrowed(s),
                     value => Cow::Owned(format!("{value}")),
@@ -216,14 +216,14 @@ impl Interpreter {
                 println!("{repr}");
             }
             Statement::Expression(expression) => {
-                self.evaluate(&expression)
-                    .with_err_at(Error::ExpressionStatementEvaluation, &location)?;
+                self.evaluate(expression)
+                    .with_err_at(Error::ExpressionStatementEvaluation, location)?;
             }
             Statement::Var(name, maybe_initializer) => {
                 let value = match maybe_initializer {
                     Some(expression) => self
-                        .evaluate(&expression)
-                        .with_err_at(Error::VarEvaluation, &location)?
+                        .evaluate(expression)
+                        .with_err_at(Error::VarEvaluation, location)?
                         .into_owned(), // own must occur in order to store the value
                     None => Value::Uninitialized,
                 };
@@ -232,8 +232,8 @@ impl Interpreter {
             Statement::Block(statements) => {
                 self.environment.push();
                 let result = self
-                    .block(&statements)
-                    .with_err_at(Error::BlockEvaluation, &location);
+                    .block(statements)
+                    .with_err_at(Error::BlockEvaluation, location);
                 self.environment
                     .pop()
                     .expect("Will always have just pushed a scope");
@@ -265,10 +265,10 @@ impl Interpreter {
         body: &Located<Statement>,
     ) -> Result<(), Located<Error>> {
         loop {
-            let condition_value = self.evaluate(&condition)?;
+            let condition_value = self.evaluate(condition)?;
             let condition_value: &Value = condition_value.borrow();
             if condition_value.into() {
-                self.statement(&body)?;
+                self.statement(body)?;
             } else {
                 break;
             }
@@ -287,29 +287,29 @@ impl Interpreter {
         &mut self,
         expression: &Located<Expression>,
     ) -> Result<Cow<Value>, Located<Error>> {
-        let location = expression.location();
+        let location = &expression.location();
         match &expression.item {
             Expression::Literal(literal_token) => self
-                .literal(&literal_token)
+                .literal(literal_token)
                 .as_owned()
-                .with_err_at(Error::InvalidLiteral, &location),
+                .with_err_at(Error::InvalidLiteral, location),
             Expression::Variable(name) => self
                 .variable(name.to_owned())
-                .with_err_at(Error::VariableResolution, &location),
+                .with_err_at(Error::VariableResolution, location),
             Expression::Assignment(name, sub_expression) => self
                 .assignment(name.clone(), sub_expression) // clone is necessary, because variable reassignment may occur
-                .with_err_at(Error::AssignmentEvaluation, &location),
-            Expression::Grouping(sub_expression) => self.evaluate(&sub_expression),
+                .with_err_at(Error::AssignmentEvaluation, location),
+            Expression::Grouping(sub_expression) => self.evaluate(sub_expression),
             Expression::Unary(unary_operator, unary_expr) => self
-                .unary(&unary_operator, &unary_expr)
+                .unary(unary_operator, unary_expr)
                 .as_owned()
-                .with_err_at(Error::UnaryEvaluation, &location),
+                .with_err_at(Error::UnaryEvaluation, location),
             Expression::Binary(binary_operator, lhs_expr, rhs_expr) => self
-                .binary(&binary_operator, &lhs_expr, &rhs_expr)
-                .with_err_at(Error::BinaryEvaluation, &location),
+                .binary(binary_operator, lhs_expr, rhs_expr)
+                .with_err_at(Error::BinaryEvaluation, location),
             Expression::Ternary(condition_expr, true_branch_expr, false_branch_expr) => self
-                .ternary(&condition_expr, &true_branch_expr, &false_branch_expr)
-                .with_err_at(Error::TernaryEvaluation, &location),
+                .ternary(condition_expr, true_branch_expr, false_branch_expr)
+                .with_err_at(Error::TernaryEvaluation, location),
         }
     }
 
