@@ -21,6 +21,8 @@ pub enum Error {
     #[error("In this assignment:\n{0}")]
     AssignmentParse(Box<MaybeLocated<Error>>),
 
+    #[error("In this while statement:\n{0}")]
+    WhileParse(Box<MaybeLocated<Error>>),
     #[error("In this if statement:\n{0}")]
     IfParse(Box<MaybeLocated<Error>>),
     #[error("In this print statement:\n{0}")]
@@ -116,6 +118,7 @@ pub enum Statement {
         Box<Located<Statement>>,
         Option<Box<Located<Statement>>>,
     ),
+    While(Located<Expression>, Box<Located<Statement>>),
     Expression(Located<Expression>),
     Var(String, Option<Located<Expression>>),
     Block(Vec<Located<Statement>>),
@@ -145,6 +148,11 @@ impl Display for Statement {
                 if let Some(false_branch) = false_branch {
                     write!(f, "  {false_branch}")?;
                 }
+                writeln!(f, ")")
+            }
+            Statement::While(condition, body) => {
+                writeln!(f, "(while {condition}")?;
+                write!(f, "  {body}")?;
                 writeln!(f, ")")
             }
         }
@@ -288,6 +296,8 @@ fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Sta
                 Token::If => {
                     if_statement(tokens, &location).with_err_located_at(Error::IfParse, &location)
                 }
+                Token::While => while_statement(tokens, &location)
+                    .with_err_located_at(Error::WhileParse, &location),
                 Token::Print => {
                     print(tokens, &location).with_err_located_at(Error::PrintParse, &location)
                 }
@@ -307,14 +317,24 @@ fn if_statement(
     if_location: &impl Locateable,
 ) -> StatementParseResult {
     tokens.next();
-    let condition_expression = expression(tokens)?;
+    let condition = expression(tokens)?;
     let true_branch = statement(tokens)?;
     let false_branch = if let Some(_) = tokens.next_if(|t| matches!(t.item, Token::Else)) {
         Some(statement(tokens)?.into())
     } else {
         None
     };
-    Ok(Statement::If(condition_expression, true_branch.into(), false_branch).at(if_location))
+    Ok(Statement::If(condition, true_branch.into(), false_branch).at(if_location))
+}
+
+fn while_statement(
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+    while_location: &impl Locateable,
+) -> StatementParseResult {
+    tokens.next();
+    let condition = expression(tokens)?;
+    let body = statement(tokens)?;
+    Ok(Statement::While(condition, body.into()).at(while_location))
 }
 
 fn print(

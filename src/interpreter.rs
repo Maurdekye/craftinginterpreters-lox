@@ -30,6 +30,8 @@ pub enum Error {
 
     #[error("In this var statement:\n{0}")]
     VarEvaluation(Box<Located<Error>>),
+    #[error("In this while statement:\n{0}")]
+    WhileEvaluation(Box<Located<Error>>),
     #[error("In this if statement:\n{0}")]
     IfEvaluation(Box<Located<Error>>),
     #[error("In this print statement:\n{0}")]
@@ -64,7 +66,7 @@ pub enum Value {
     True,
     False,
     Nil,
-    Unititialized,
+    Uninitialized,
 }
 
 impl From<bool> for Value {
@@ -94,7 +96,7 @@ impl Display for Value {
             Value::True => write!(f, "true"),
             Value::False => write!(f, "false"),
             Value::Nil => write!(f, "nil"),
-            Value::Unititialized => write!(f, "uninitialized"),
+            Value::Uninitialized => write!(f, "uninitialized"),
         }
     }
 }
@@ -196,6 +198,10 @@ impl Interpreter {
                 self.if_statement(condition, *true_branch, false_branch.map(|x| *x))
                     .with_err_at(Error::IfEvaluation, &location)?;
             }
+            Statement::While(condition, body) => {
+                self.while_statement(condition, *body)
+                .with_err_at(Error::WhileEvaluation, &location)?;
+            },
             Statement::Print(expression) => {
                 let result = self
                     .evaluate(expression)
@@ -216,7 +222,7 @@ impl Interpreter {
                         .evaluate(expression)
                         .with_err_at(Error::VarEvaluation, &location)?
                         .into_owned(), // own must occur in order to store the value
-                    None => Value::Unititialized,
+                    None => Value::Uninitialized,
                 };
                 self.environment.top_entry(name).insert(value);
             }
@@ -241,11 +247,28 @@ impl Interpreter {
         false_branch: Option<Located<Statement>>,
     ) -> Result<(), Located<Error>> {
         let condition_value = self.evaluate(condition)?;
-        let condition_bool: &Value = condition_value.borrow();
-        if condition_bool.into() {
+        let condition_value: &Value = condition_value.borrow();
+        if condition_value.into() {
             self.statement(true_branch)?;
         } else if let Some(false_branch) = false_branch {
             self.statement(false_branch)?;
+        }
+        Ok(())
+    }
+
+    fn while_statement(
+        &mut self,
+        condition: Located<Expression>,
+        body: Located<Statement>,
+    ) -> Result<(), Located<Error>> {
+        loop {
+            let condition_value = self.evaluate(condition.clone())?; // yeah... no. this needs to be refactored
+            let condition_value: &Value = condition_value.borrow();
+            if condition_value.into() {
+                self.statement(body.clone())?;  // these clones are unacceptable :(
+            } else {
+                break;
+            }
         }
         Ok(())
     }
@@ -298,7 +321,7 @@ impl Interpreter {
     fn variable(&mut self, name: String) -> Result<Cow<Value>, Error> {
         match self.environment.entry(name) {
             Entry::Occupied(occupied) => match occupied.get() {
-                Value::Unititialized => Err(Error::UninitializedVariable(occupied.key().clone())), // error contents must be owned (no `OccupiedEntry::into_key` 🙁)
+                Value::Uninitialized => Err(Error::UninitializedVariable(occupied.key().clone())), // error contents must be owned (no `OccupiedEntry::into_key` 🙁)
                 _ => Ok(Cow::Borrowed(occupied.into_mut())),
             },
             Entry::Vacant(vacant) => Err(Error::UndeclaredVariable(vacant.into_key())),
