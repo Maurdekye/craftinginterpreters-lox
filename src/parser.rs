@@ -298,7 +298,7 @@ fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Sta
                 Token::While => while_statement(tokens, location)
                     .with_err_located_at(Error::WhileParse, location),
                 Token::For => {
-                    for_statement(tokens).with_err_located_at(Error::ForParse, location)
+                    for_statement(tokens, location).with_err_located_at(Error::ForParse, location)
                 }
                 Token::Print => {
                     print(tokens, location).with_err_located_at(Error::PrintParse, location)
@@ -316,7 +316,7 @@ fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Sta
 
 fn if_statement(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
-    if_location: &impl Locateable,
+    location: &impl Locateable,
 ) -> StatementParseResult {
     tokens.next();
     let condition = expression(tokens)?;
@@ -326,21 +326,22 @@ fn if_statement(
     } else {
         None
     };
-    Ok(Statement::If(condition, true_branch.into(), false_branch.into()).at(if_location))
+    Ok(Statement::If(condition, true_branch.into(), false_branch.into()).at(location))
 }
 
 fn while_statement(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
-    while_location: &impl Locateable,
+    location: &impl Locateable,
 ) -> StatementParseResult {
     tokens.next();
     let condition = expression(tokens)?;
     let body = statement(tokens)?;
-    Ok(Statement::While(condition, body.into()).at(while_location))
+    Ok(Statement::While(condition, body.into()).at(location))
 }
 
 fn for_statement(
-    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+    location: &impl Locateable,
 ) -> StatementParseResult {
     tokens.next();
     consume(
@@ -393,7 +394,6 @@ fn for_statement(
         None
     };
     let mut body = statement(tokens)?;
-    let body_location = body.location();
 
     // construct final ast
     if let Some(increment) = increment {
@@ -402,30 +402,30 @@ fn for_statement(
             body,
             Statement::Expression(increment).at(&increment_location),
         ])
-        .at(&body_location);
+        .at(location);
     }
     let condition =
-        condition.unwrap_or(Expression::Literal(Token::True.at(&body_location)).at(&body_location));
-    let mut loop_body = Statement::While(condition, Box::new(body)).at(&body_location);
+        condition.unwrap_or(Expression::Literal(Token::True.at(location)).at(location));
+    let mut loop_body = Statement::While(condition, Box::new(body)).at(location);
     if let Some(initializer) = initializer {
-        loop_body = Statement::Block(vec![initializer, loop_body]).at(&body_location);
+        loop_body = Statement::Block(vec![initializer, loop_body]).at(location);
     }
     Ok(loop_body)
 }
 
 fn print(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
-    print_location: &impl Locateable,
+    location: &impl Locateable,
 ) -> StatementParseResult {
     tokens.next();
     let expr = expression(tokens)?;
     consume_semicolon(tokens)?;
-    Ok(Statement::Print(expr).at(print_location))
+    Ok(Statement::Print(expr).at(location))
 }
 
 fn block(
     tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
-    block_location: &impl Locateable,
+    location: &impl Locateable,
 ) -> StatementParseResultErrors {
     tokens.next();
     let mut statements = Vec::new();
@@ -450,12 +450,12 @@ fn block(
                 },
             },
             None => {
-                errors.push(Error::UnexpectedEndOfTokenStream.located_at(block_location));
+                errors.push(Error::UnexpectedEndOfTokenStream.located_at(location));
                 break;
             }
         }
     }
-    errors.empty_ok(Statement::Block(statements).at(block_location))
+    errors.empty_ok(Statement::Block(statements).at(location))
 }
 
 fn expression_statement(
