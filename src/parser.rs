@@ -113,6 +113,7 @@ pub enum Statement {
         Box<Located<Statement>>,
         Box<Option<Located<Statement>>>,
     ),
+    Break,
     While(Located<Expression>, Box<Located<Statement>>),
     Expression(Located<Expression>),
     Var(String, Option<Located<Expression>>),
@@ -149,6 +150,9 @@ impl Display for Statement {
                 writeln!(f, "(while {condition}")?;
                 write!(f, "  {body}")?;
                 writeln!(f, ")")
+            }
+            Statement::Break => {
+                writeln!(f, "break")
             }
         }
     }
@@ -292,6 +296,7 @@ fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Sta
         Some(located_token) => {
             let location = &located_token.location();
             match located_token.item {
+                Token::Break => Ok(Statement::Break.at(location)),
                 Token::If => {
                     if_statement(tokens, location).with_err_located_at(Error::IfParse, location)
                 }
@@ -404,8 +409,7 @@ fn for_statement(
         ])
         .at(location);
     }
-    let condition =
-        condition.unwrap_or(Expression::Literal(Token::True.at(location)).at(location));
+    let condition = condition.unwrap_or(Expression::Literal(Token::True.at(location)).at(location));
     let mut loop_body = Statement::While(condition, Box::new(body)).at(location);
     if let Some(initializer) = initializer {
         loop_body = Statement::Block(vec![initializer, loop_body]).at(location);

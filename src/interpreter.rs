@@ -57,6 +57,11 @@ pub enum Error {
     InvalidTernary(Value),
     #[error("This is supposed to be a value, but it was a '{0}'")]
     InvalidLiteral(Token),
+
+    #[error("Can't 'break' when not in a loop")]
+    Break,
+    #[error("Can't 'continue' when not in a loop")]
+    Continue,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -197,6 +202,7 @@ impl Interpreter {
     fn statement(&mut self, statement: &Located<Statement>) -> Result<(), Located<Error>> {
         let location = &statement.location();
         match &statement.item {
+            Statement::Break => return Err(Error::Break.at(location)),
             Statement::If(condition, true_branch, false_branch) => {
                 self.if_statement(condition, true_branch.as_ref(), false_branch.as_ref())
                     .with_err_at(Error::IfEvaluation, location)?;
@@ -271,7 +277,17 @@ impl Interpreter {
             let condition_value: &Value = condition_value.borrow();
             condition_value.into()
         } {
-            self.statement(body)?;
+            // this feels hacky but it's the cleanest way to do it with the current architecture :/
+            match self.statement(body) {
+                Err(Located {
+                    item: Error::Break, ..
+                }) => break,
+                Err(Located {
+                    item: Error::Continue,
+                    ..
+                }) => continue,
+                _ => (),
+            }
         }
         Ok(())
     }

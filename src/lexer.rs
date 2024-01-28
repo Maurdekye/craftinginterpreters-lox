@@ -61,6 +61,8 @@ pub enum Token {
     True,
     Var,
     While,
+    Break,
+    Continue,
 
     Eof,
 }
@@ -111,6 +113,8 @@ impl Display for Token {
             Token::True => write!(f, "true"),
             Token::Var => write!(f, "var"),
             Token::While => write!(f, "while"),
+            Token::Break => write!(f, "break"),
+            Token::Continue => write!(f, "continue"),
 
             Token::Eof => write!(f, "EOF"),
         }
@@ -372,6 +376,8 @@ impl Iterator for Tokens<'_> {
                     "true" => Token::True,
                     "var" => Token::Var,
                     "while" => Token::While,
+                    "break" => Token::Break,
+                    "continue" => Token::Continue,
                     ident => Token::Identifier(ident.to_string()),
                 };
                 let result = Some(Ok(identifier.at(self)));
