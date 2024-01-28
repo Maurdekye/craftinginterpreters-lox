@@ -77,6 +77,18 @@ impl From<bool> for Value {
     }
 }
 
+impl TryInto<bool> for Value {
+    type Error = Value;
+
+    fn try_into(self) -> Result<bool, Self::Error> {
+        match self {
+            Self::True => Ok(true),
+            Self::False | Self::Nil => Ok(false),
+            _ => Err(self),
+        }
+    }
+}
+
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -233,15 +245,10 @@ impl Interpreter {
     ) -> Result<(), Located<Error>> {
         let condition_location = condition.location();
         let condition_value = self.evaluate(condition)?;
-        let condition_bool = match condition_value.borrow() {
-            Value::True => true,
-            Value::False => false,
-            _ => {
-                return Err(
-                    Error::InvalidIfCondition(condition_value.into_owned()).at(&condition_location)
-                )
-            } // error contents must be owned
-        };
+        let condition_bool = condition_value
+            .into_owned() // own must occur in order to return as an error
+            .try_into()
+            .with_err_at(Error::InvalidIfCondition, &condition_location)?;
         if condition_bool {
             self.statement(true_branch)?;
         } else if let Some(false_branch) = false_branch {
@@ -448,15 +455,10 @@ impl Interpreter {
         let condition_location = condition_expr.location();
 
         let condition_value = self.evaluate(condition_expr)?;
-        let condition_bool = match condition_value.borrow() {
-            Value::True => true,
-            Value::False => false,
-            _ => {
-                return Err(
-                    Error::InvalidTernary(condition_value.into_owned()).at(&condition_location)
-                )
-            } // error contents must be owned
-        };
+        let condition_bool = condition_value
+            .into_owned() // own must occur in order to return as an error
+            .try_into()
+            .with_err_at(Error::InvalidTernary, &condition_location)?;
 
         if condition_bool {
             self.evaluate(true_branch_expr)
