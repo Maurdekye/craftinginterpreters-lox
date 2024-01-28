@@ -1,4 +1,5 @@
 use std::{
+    borrow::{Borrow, Cow},
     collections::{hash_map::Entry, HashMap},
     fmt::Display,
 };
@@ -9,7 +10,7 @@ use replace_with::replace_with_or_abort;
 use crate::{
     lexer::Token,
     parser::{Expression, Statement},
-    util::{AppendLocatedError, Locateable, Located, LocatedAt},
+    util::{AppendLocatedError, AsOwned, EntryInsert, Locateable, Located, LocatedAt},
 };
 
 use thiserror::Error as ThisError;
@@ -105,7 +106,7 @@ impl Environment {
         Self::Global(HashMap::new())
     }
 
-    pub fn entry(&mut self, key: String) -> Entry<'_, String, Value> {
+    pub fn entry<'a>(&'a mut self, key: String) -> Entry<'a, String, Value> {
         let (mut env, outer_scope) = match self {
             Environment::Global(env) => return env.entry(key),
             Environment::Scope(env, outer_scope) => (env, outer_scope),
@@ -162,27 +163,24 @@ impl Interpreter {
         }
     }
 
-    /// The signature is set up to support statements *potentially* evaluating to a
-    /// value in future versions of the code, but currently, they always evaluate to Nil.
     pub fn interpret(
         &mut self,
         statements: Vec<Located<Statement>>,
-    ) -> Result<Value, Located<Error>> {
-        let mut result = Value::Nil;
+    ) -> Result<(), Located<Error>> {
         for statement in statements {
-            result = self.statement(statement)?;
+            self.statement(statement)?;
         }
-        Ok(result)
+        Ok(())
     }
 
-    fn statement(&mut self, statement: Located<Statement>) -> Result<Value, Located<Error>> {
+    fn statement(&mut self, statement: Located<Statement>) -> Result<(), Located<Error>> {
         let location = statement.location();
         match statement.item {
             Statement::Print(expression) => {
                 let result = self
                     .evaluate(expression)
                     .with_err_at(Error::PrintEvaluation, &location)?;
-                let repr = match result {
+                let repr = match result.into_owned() {
                     Value::String(s) => s,
                     value => format!("{value}"),
                 };
@@ -196,10 +194,11 @@ impl Interpreter {
                 let value = match maybe_initializer {
                     Some(expression) => self
                         .evaluate(expression)
-                        .with_err_at(Error::VarEvaluation, &location)?,
+                        .with_err_at(Error::VarEvaluation, &location)?
+                        .into_owned(),
                     None => Value::Nil,
                 };
-                self.environment.top_entry(name).or_insert(value);
+                self.environment.top_entry(name).insert(value);
             }
             Statement::Block(statements) => {
                 self.environment.push();
@@ -211,14 +210,15 @@ impl Interpreter {
                     .expect("Will always have just pushed a scope");
             }
         }
-        Ok(Value::Nil)
+        Ok(())
     }
 
-    fn evaluate(&mut self, expression: Located<Expression>) -> Result<Value, Located<Error>> {
+    fn evaluate(&mut self, expression: Located<Expression>) -> Result<Cow<Value>, Located<Error>> {
         let location = expression.location();
         match expression.item {
             Expression::Literal(literal_token) => self
                 .literal(literal_token)
+                .as_owned()
                 .with_err_at(Error::InvalidLiteral, &location),
             Expression::Variable(name) => self
                 .variable(name)
@@ -229,6 +229,7 @@ impl Interpreter {
             Expression::Grouping(sub_expression) => self.evaluate(sub_expression.as_deref()),
             Expression::Unary(unary_operator, unary_expr) => self
                 .unary(unary_operator, unary_expr.as_deref())
+                .as_owned()
                 .with_err_at(Error::UnaryEvaluation, &location),
             Expression::Binary(binary_operator, lhs_expr, rhs_expr) => self
                 .binary(binary_operator, lhs_expr.as_deref(), rhs_expr.as_deref())
@@ -247,25 +248,27 @@ impl Interpreter {
         literal.item.try_into()
     }
 
-    fn variable(&mut self, name: String) -> Result<Value, String> {
+    fn variable(&mut self, name: String) -> Result<Cow<Value>, String> {
         match self.environment.entry(name) {
-            Entry::Occupied(occupied) => Ok(occupied.get().clone()),
+            Entry::Occupied(occupied) => Ok(Cow::Borrowed(occupied.into_mut())),
             Entry::Vacant(vacant) => Err(vacant.into_key()),
         }
     }
 
-    fn assignment(
-        &mut self,
+    fn assignment<'a>(
+        &'a mut self,
         name: Located<String>,
         expression: Located<Expression>,
-    ) -> Result<Value, Located<Error>> {
+    ) -> Result<Cow<'a, Value>, Located<Error>> {
         let (location, name) = name.split();
-        let value = self.evaluate(expression)?;
-        match self.environment.entry(name.clone()) {
-            Entry::Vacant(_) => Err(Error::UndeclaredVariable(name).at(&location)),
+        let value = self.evaluate(expression)?.into_owned();
+        match self.environment.entry(name) {
+            Entry::Vacant(vacant) => {
+                Err(Error::UndeclaredVariable(vacant.into_key()).at(&location))
+            }
             Entry::Occupied(mut entry) => {
-                entry.insert(value.clone());
-                Ok(value)
+                entry.insert(value);
+                Ok(Cow::Borrowed(entry.into_mut()))
             }
         }
     }
@@ -277,11 +280,11 @@ impl Interpreter {
     ) -> Result<Value, Located<Error>> {
         let location = unary.location();
         let value = self.evaluate(unary_expr)?;
-        match (unary.item, value) {
+        match (unary.item, value.borrow()) {
             (Token::Minus, Value::Number(value)) => Ok(Value::Number(-value)),
             (Token::Bang, Value::False | Value::Nil) => Ok(Value::True),
             (Token::Bang, Value::True) => Ok(Value::False),
-            (unary, value) => Err(Error::InvalidUnary(unary, value).at(&location)),
+            (unary, _) => Err(Error::InvalidUnary(unary, value.into_owned()).at(&location)), // error contents must be owned 
         }
     }
 
@@ -290,69 +293,95 @@ impl Interpreter {
         binary: Located<Token>,
         lhs_expr: Located<Expression>,
         rhs_expr: Located<Expression>,
-    ) -> Result<Value, Located<Error>> {
+    ) -> Result<Cow<Value>, Located<Error>> {
         let binary_location = binary.location();
         let lhs_location = lhs_expr.location();
 
         let lhs_value = self.evaluate(lhs_expr)?;
 
         // match short circuit boolean operations before evaluating right hand side
-        let lhs_value = match (lhs_value, &binary.item) {
-            (lhs @ (Value::False | Value::Nil), Token::And) | (lhs @ Value::True, Token::Or) => {
-                return Ok(lhs)
+        let lhs_value = match (lhs_value.borrow(), &binary.item) {
+            (Value::False | Value::Nil, Token::And) | (Value::True, Token::Or) => {
+                return Ok(Cow::Owned(lhs_value.into_owned())); // this is a cheap own, because the value can only ever be False, True, or Nil
             }
-            (lhs, _) => lhs,
+            _ => lhs_value.into_owned(), // this own may not be cheap, but it is unavoidable 😔
         };
 
         let rhs_value = self.evaluate(rhs_expr)?;
 
-        match (lhs_value, binary.item, rhs_value) {
+        match (lhs_value.borrow(), binary.item, rhs_value.borrow()) {
             // equality
-            (lhs, Token::EqualEqual, rhs) => Ok((lhs == rhs).into()),
-            (lhs, Token::BangEqual, rhs) => Ok((lhs != rhs).into()),
+            (lhs, Token::EqualEqual, rhs) => Ok(Cow::Owned((lhs == rhs).into())),
+            (lhs, Token::BangEqual, rhs) => Ok(Cow::Owned((lhs != rhs).into())),
 
             // boolean
-            (Value::True, Token::And, rhs) | (Value::False | Value::Nil, Token::Or, rhs) => Ok(rhs),
+            (Value::True, Token::And, _) | (Value::False | Value::Nil, Token::Or, _) => {
+                Ok(rhs_value)
+            }
 
             // comparison
-            (Value::Number(lhs), Token::Less, Value::Number(rhs)) => Ok((lhs < rhs).into()),
-            (Value::Number(lhs), Token::LessEqual, Value::Number(rhs)) => Ok((lhs <= rhs).into()),
-            (Value::Number(lhs), Token::Greater, Value::Number(rhs)) => Ok((lhs > rhs).into()),
-            (Value::Number(lhs), Token::GreaterEqual, Value::Number(rhs)) => {
-                Ok((lhs >= rhs).into())
+            (Value::Number(lhs), Token::Less, Value::Number(rhs)) => {
+                Ok(Cow::Owned((lhs < rhs).into()))
             }
-            (Value::String(lhs), Token::Less, Value::String(rhs)) => Ok((lhs < rhs).into()),
-            (Value::String(lhs), Token::LessEqual, Value::String(rhs)) => Ok((lhs <= rhs).into()),
-            (Value::String(lhs), Token::Greater, Value::String(rhs)) => Ok((lhs > rhs).into()),
+            (Value::Number(lhs), Token::LessEqual, Value::Number(rhs)) => {
+                Ok(Cow::Owned((lhs <= rhs).into()))
+            }
+            (Value::Number(lhs), Token::Greater, Value::Number(rhs)) => {
+                Ok(Cow::Owned((lhs > rhs).into()))
+            }
+            (Value::Number(lhs), Token::GreaterEqual, Value::Number(rhs)) => {
+                Ok(Cow::Owned((lhs >= rhs).into()))
+            }
+            (Value::String(lhs), Token::Less, Value::String(rhs)) => {
+                Ok(Cow::Owned((lhs < rhs).into()))
+            }
+            (Value::String(lhs), Token::LessEqual, Value::String(rhs)) => {
+                Ok(Cow::Owned((lhs <= rhs).into()))
+            }
+            (Value::String(lhs), Token::Greater, Value::String(rhs)) => {
+                Ok(Cow::Owned((lhs > rhs).into()))
+            }
             (Value::String(lhs), Token::GreaterEqual, Value::String(rhs)) => {
-                Ok((lhs >= rhs).into())
+                Ok(Cow::Owned((lhs >= rhs).into()))
             }
 
             // arithmetic
-            (lhs, Token::Slash, Value::Number(rhs)) if rhs == 0.0 => {
-                Err(Error::DivisionByZero(lhs).at(&lhs_location))
+            (_, Token::Slash, Value::Number(rhs)) if rhs.borrow() == &0.0 => {
+                Err(Error::DivisionByZero(lhs_value).at(&lhs_location))
             }
-            (Value::Number(lhs), Token::Minus, Value::Number(rhs)) => Ok(Value::Number(lhs - rhs)),
-            (Value::Number(lhs), Token::Plus, Value::Number(rhs)) => Ok(Value::Number(lhs + rhs)),
-            (Value::Number(lhs), Token::Star, Value::Number(rhs)) => Ok(Value::Number(lhs * rhs)),
-            (Value::Number(lhs), Token::Slash, Value::Number(rhs)) => Ok(Value::Number(lhs / rhs)),
+            (Value::Number(lhs), Token::Minus, Value::Number(rhs)) => {
+                Ok(Cow::Owned(Value::Number(lhs - rhs)))
+            }
+            (Value::Number(lhs), Token::Plus, Value::Number(rhs)) => {
+                Ok(Cow::Owned(Value::Number(lhs + rhs)))
+            }
+            (Value::Number(lhs), Token::Star, Value::Number(rhs)) => {
+                Ok(Cow::Owned(Value::Number(lhs * rhs)))
+            }
+            (Value::Number(lhs), Token::Slash, Value::Number(rhs)) => {
+                Ok(Cow::Owned(Value::Number(lhs / rhs)))
+            }
 
             // string concatenation
             (Value::String(lhs), Token::Plus, Value::String(rhs)) => {
-                Ok(Value::String(format!("{lhs}{rhs}")))
+                Ok(Cow::Owned(Value::String(format!("{lhs}{rhs}"))))
             }
-            (Value::String(lhs), Token::Plus, rhs) => Ok(Value::String(format!("{lhs}{rhs}"))),
-            (lhs, Token::Plus, Value::String(rhs)) => Ok(Value::String(format!("{lhs}{rhs}"))),
+            (Value::String(lhs), Token::Plus, rhs) => {
+                Ok(Cow::Owned(Value::String(format!("{lhs}{rhs}"))))
+            }
+            (lhs, Token::Plus, Value::String(rhs)) => {
+                Ok(Cow::Owned(Value::String(format!("{lhs}{rhs}"))))
+            }
 
             // string cycling
             (Value::String(string), Token::Star, Value::Number(quantity))
             | (Value::Number(quantity), Token::Star, Value::String(string)) => {
-                Ok(Value::String(string.repeat(quantity as usize)))
+                Ok(Cow::Owned(Value::String(string.repeat(*quantity as usize))))
             }
 
             // invalid
-            (lhs, operator, rhs) => {
-                Err(Error::InvalidBinary(lhs, operator, rhs).at(&binary_location))
+            (_, operator, _) => {
+                Err(Error::InvalidBinary(lhs_value, operator, rhs_value.into_owned()).at(&binary_location))  // error contents must be owned
             }
         }
     }
@@ -362,14 +391,14 @@ impl Interpreter {
         condition_expr: Located<Expression>,
         true_branch_expr: Located<Expression>,
         false_branch_expr: Located<Expression>,
-    ) -> Result<Value, Located<Error>> {
+    ) -> Result<Cow<Value>, Located<Error>> {
         let condition_location = condition_expr.location();
 
         let condition_value = self.evaluate(condition_expr)?;
-        let condition_bool = match condition_value {
+        let condition_bool = match condition_value.borrow() {
             Value::True => true,
             Value::False => false,
-            value => return Err(Error::InvalidTernary(value).at(&condition_location)),
+            _ => return Err(Error::InvalidTernary(condition_value.into_owned()).at(&condition_location)), // error contents must be owned
         };
 
         if condition_bool {

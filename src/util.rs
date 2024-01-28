@@ -1,4 +1,6 @@
 use std::{
+    borrow::Cow,
+    collections::hash_map::Entry,
     error::Error as StdError,
     fmt::Display,
     iter::once,
@@ -378,5 +380,36 @@ impl<T, E> WrapErrors for Result<T, E> {
 
     fn errs(self) -> Self::Output {
         self.map_err(|err| once(err).collect())
+    }
+}
+
+pub trait EntryInsert<V> {
+    fn insert(self, value: V);
+}
+
+impl<K, V> EntryInsert<V> for Entry<'_, K, V> {
+    fn insert(self, value: V) {
+        match self {
+            Entry::Occupied(mut entry) => {
+                entry.insert(value);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(value);
+            }
+        }
+    }
+}
+
+pub trait AsOwned<'a> {
+    type Output;
+
+    fn as_owned(self) -> Self::Output;
+}
+
+impl<'a, T: Clone + 'a, E> AsOwned<'a> for Result<T, E> {
+    type Output = Result<Cow<'a, T>, E>;
+
+    fn as_owned(self) -> Self::Output {
+        self.map(|v| Cow::Owned(v))
     }
 }

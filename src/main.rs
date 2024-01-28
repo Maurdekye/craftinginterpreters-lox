@@ -5,7 +5,6 @@ use std::{
     process::{ExitCode, Termination},
 };
 
-use interpreter::Value;
 use lexer::Tokens;
 use thiserror::Error as ThisError;
 
@@ -57,7 +56,7 @@ impl Termination for RootError {
 
 /// Interpret lox code, evaluating and printing the execution result,
 /// and then return a list of any errors that may have been encountered
-fn run_with(source: String, interpreter: &mut Interpreter) -> Result<Value, Errors<Error>> {
+fn run_with(source: String, interpreter: &mut Interpreter) -> Result<(), Errors<Error>> {
     let mut errors = Errors::new();
     let mut raw_tokens = Tokens::from(&*source);
     let tokens = iter::from_fn(|| loop {
@@ -70,13 +69,13 @@ fn run_with(source: String, interpreter: &mut Interpreter) -> Result<Value, Erro
     let Some(statements) = parser::parse(tokens).errors_into(&mut errors) else {
         return Err(errors);
     };
-    let Some(result) = interpreter.interpret(statements).error_into(&mut errors) else {
+    let Some(()) = interpreter.interpret(statements).error_into(&mut errors) else {
         return Err(errors);
     };
-    errors.empty_ok(result)
+    errors.empty_ok(())
 }
 
-fn run(source: String) -> Result<Value, Errors<Error>> {
+fn run(source: String) -> Result<(), Errors<Error>> {
     run_with(source, &mut Interpreter::new())
 }
 
