@@ -21,6 +21,8 @@ pub enum Error {
     #[error("In this assignment:\n{0}")]
     AssignmentParse(Box<MaybeLocated<Error>>),
 
+    #[error("In this if statement:\n{0}")]
+    IfParse(Box<MaybeLocated<Error>>),
     #[error("In this print statement:\n{0}")]
     PrintParse(Box<MaybeLocated<Error>>),
     #[error("In this var statement:\n{0}")]
@@ -109,6 +111,11 @@ impl From<Located<Expression>> for Located<Box<Expression>> {
 #[derive(Clone, Debug)]
 pub enum Statement {
     Print(Located<Expression>),
+    If(
+        Located<Expression>,
+        Box<Located<Statement>>,
+        Option<Box<Located<Statement>>>,
+    ),
     Expression(Located<Expression>),
     Var(String, Option<Located<Expression>>),
     Block(Vec<Located<Statement>>),
@@ -129,6 +136,14 @@ impl Display for Statement {
                 writeln!(f, "(block")?;
                 for statement in statements {
                     write!(f, "  {}", statement.item)?;
+                }
+                writeln!(f, ")")
+            }
+            Statement::If(condition, true_branch, false_branch) => {
+                writeln!(f, "(if {condition}")?;
+                write!(f, "  {true_branch}")?;
+                if let Some(false_branch) = false_branch {
+                    write!(f, "  {false_branch}")?;
                 }
                 writeln!(f, ")")
             }
@@ -270,6 +285,9 @@ fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Sta
         Some(located_token) => {
             let location = located_token.location();
             match located_token.item {
+                Token::If => {
+                    if_statement(tokens, &location).with_err_located_at(Error::IfParse, &location)
+                }
                 Token::Print => {
                     print(tokens, &location).with_err_located_at(Error::PrintParse, &location)
                 }
@@ -282,6 +300,21 @@ fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Sta
         }
         None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
     }
+}
+
+fn if_statement(
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>,
+    if_location: &impl Locateable,
+) -> StatementParseResult {
+    tokens.next();
+    let condition_expression = expression(tokens)?;
+    let true_branch = statement(tokens)?;
+    let false_branch = if let Some(_) = tokens.next_if(|t| matches!(t.item, Token::Else)) {
+        Some(statement(tokens)?.into())
+    } else {
+        None
+    };
+    Ok(Statement::If(condition_expression, true_branch.into(), false_branch).at(if_location))
 }
 
 fn print(

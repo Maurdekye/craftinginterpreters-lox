@@ -30,6 +30,8 @@ pub enum Error {
 
     #[error("In this var statement:\n{0}")]
     VarEvaluation(Box<Located<Error>>),
+    #[error("In this if statement:\n{0}")]
+    IfEvaluation(Box<Located<Error>>),
     #[error("In this print statement:\n{0}")]
     PrintEvaluation(Box<Located<Error>>),
     #[error("In this block:\n{0}")]
@@ -37,6 +39,8 @@ pub enum Error {
     #[error("In this statement:\n{0}")]
     ExpressionStatementEvaluation(Box<Located<Error>>),
 
+    #[error("This is supposed to be true or false, but it was '{0}'")]
+    InvalidIfCondition(Value),
     #[error("You haven't defined '{0}' yet")]
     UndeclaredVariable(String),
     #[error("'{0}' isn't initialized")]
@@ -179,6 +183,10 @@ impl Interpreter {
     fn statement(&mut self, statement: Located<Statement>) -> Result<(), Located<Error>> {
         let location = statement.location();
         match statement.item {
+            Statement::If(condition, true_branch, false_branch) => {
+                self.if_statement(condition, *true_branch, false_branch.map(|x| *x))
+                    .with_err_at(Error::IfEvaluation, &location)?;
+            }
             Statement::Print(expression) => {
                 let result = self
                     .evaluate(expression)
@@ -213,6 +221,38 @@ impl Interpreter {
                     .expect("Will always have just pushed a scope");
                 result?;
             }
+        }
+        Ok(())
+    }
+
+    fn if_statement(
+        &mut self,
+        condition: Located<Expression>,
+        true_branch: Located<Statement>,
+        false_branch: Option<Located<Statement>>,
+    ) -> Result<(), Located<Error>> {
+        let condition_location = condition.location();
+        let condition_value = self.evaluate(condition)?;
+        let condition_bool = match condition_value.borrow() {
+            Value::True => true,
+            Value::False => false,
+            _ => {
+                return Err(
+                    Error::InvalidIfCondition(condition_value.into_owned()).at(&condition_location)
+                )
+            } // error contents must be owned
+        };
+        if condition_bool {
+            self.statement(true_branch)?;
+        } else if let Some(false_branch) = false_branch {
+            self.statement(false_branch)?;
+        }
+        Ok(())
+    }
+
+    fn block(&mut self, statements: Vec<Located<Statement>>) -> Result<(), Located<Error>> {
+        for statement in statements {
+            self.statement(statement)?;
         }
         Ok(())
     }
@@ -258,18 +298,11 @@ impl Interpreter {
     fn variable(&mut self, name: String) -> Result<Cow<Value>, Error> {
         match self.environment.entry(name) {
             Entry::Occupied(occupied) => match occupied.get() {
-                Value::Unititialized => Err(Error::UninitializedVariable(occupied.key().clone())), // errors must be owned
+                Value::Unititialized => Err(Error::UninitializedVariable(occupied.key().clone())), // errors must be owned (no `OccupiedEntry::into_key` 🙁)
                 _ => Ok(Cow::Borrowed(occupied.into_mut())),
             },
             Entry::Vacant(vacant) => Err(Error::UndeclaredVariable(vacant.into_key())), // errors must be owned
         }
-    }
-
-    fn block(&mut self, statements: Vec<Located<Statement>>) -> Result<(), Located<Error>> {
-        for statement in statements {
-            self.statement(statement)?;
-        }
-        Ok(())
     }
 
     fn assignment<'a>(
