@@ -70,7 +70,7 @@ fn run_with(source: String, interpreter: &mut Interpreter) -> Result<(), Errors<
     let Some(statements) = parser::parse(tokens).errors_into(&mut errors) else {
         return Err(errors);
     };
-    let Some(()) = interpreter.interpret(statements).error_into(&mut errors) else {
+    let Some(()) = interpreter.interpret(&statements).error_into(&mut errors) else {
         return Err(errors);
     };
     errors.empty_ok(())
@@ -90,7 +90,7 @@ fn eval_with(source: String, interpreter: &mut Interpreter) -> Result<Value, Err
     let Some(expression) = parser::expression(&mut tokens).error_into(&mut errors) else {
         return Err(errors);
     };
-    let Some(value) = interpreter.evaluate(expression).error_into(&mut errors) else {
+    let Some(value) = interpreter.evaluate(&expression).error_into(&mut errors) else {
         return Err(errors);
     };
     errors.empty_ok(value.into_owned())

@@ -184,27 +184,30 @@ impl Interpreter {
         }
     }
 
-    pub fn interpret(&mut self, statements: Vec<Located<Statement>>) -> Result<(), Located<Error>> {
+    pub fn interpret(
+        &mut self,
+        statements: &Vec<Located<Statement>>,
+    ) -> Result<(), Located<Error>> {
         for statement in statements {
             self.statement(statement)?;
         }
         Ok(())
     }
 
-    fn statement(&mut self, statement: Located<Statement>) -> Result<(), Located<Error>> {
+    fn statement(&mut self, statement: &Located<Statement>) -> Result<(), Located<Error>> {
         let location = statement.location();
-        match statement.item {
+        match &statement.item {
             Statement::If(condition, true_branch, false_branch) => {
-                self.if_statement(condition, *true_branch, false_branch.map(|x| *x))
+                self.if_statement(condition, true_branch.as_ref(), false_branch.as_deref())
                     .with_err_at(Error::IfEvaluation, &location)?;
             }
             Statement::While(condition, body) => {
-                self.while_statement(condition, *body)
-                .with_err_at(Error::WhileEvaluation, &location)?;
-            },
+                self.while_statement(&condition, &*body)
+                    .with_err_at(Error::WhileEvaluation, &location)?;
+            }
             Statement::Print(expression) => {
                 let result = self
-                    .evaluate(expression)
+                    .evaluate(&expression)
                     .with_err_at(Error::PrintEvaluation, &location)?;
                 let repr: Cow<'_, String> = match result.borrow() {
                     Value::String(s) => Cow::Borrowed(s),
@@ -213,23 +216,23 @@ impl Interpreter {
                 println!("{repr}");
             }
             Statement::Expression(expression) => {
-                self.evaluate(expression)
+                self.evaluate(&expression)
                     .with_err_at(Error::ExpressionStatementEvaluation, &location)?;
             }
             Statement::Var(name, maybe_initializer) => {
                 let value = match maybe_initializer {
                     Some(expression) => self
-                        .evaluate(expression)
+                        .evaluate(&expression)
                         .with_err_at(Error::VarEvaluation, &location)?
                         .into_owned(), // own must occur in order to store the value
                     None => Value::Uninitialized,
                 };
-                self.environment.top_entry(name).insert(value);
+                self.environment.top_entry(name.to_owned()).insert(value);
             }
             Statement::Block(statements) => {
                 self.environment.push();
                 let result = self
-                    .block(statements)
+                    .block(&statements)
                     .with_err_at(Error::BlockEvaluation, &location);
                 self.environment
                     .pop()
@@ -242,9 +245,9 @@ impl Interpreter {
 
     fn if_statement(
         &mut self,
-        condition: Located<Expression>,
-        true_branch: Located<Statement>,
-        false_branch: Option<Located<Statement>>,
+        condition: &Located<Expression>,
+        true_branch: &Located<Statement>,
+        false_branch: Option<&Located<Statement>>,
     ) -> Result<(), Located<Error>> {
         let condition_value = self.evaluate(condition)?;
         let condition_value: &Value = condition_value.borrow();
@@ -258,14 +261,14 @@ impl Interpreter {
 
     fn while_statement(
         &mut self,
-        condition: Located<Expression>,
-        body: Located<Statement>,
+        condition: &Located<Expression>,
+        body: &Located<Statement>,
     ) -> Result<(), Located<Error>> {
         loop {
-            let condition_value = self.evaluate(condition.clone())?; // yeah... no. this needs to be refactored
+            let condition_value = self.evaluate(&condition)?;
             let condition_value: &Value = condition_value.borrow();
             if condition_value.into() {
-                self.statement(body.clone())?;  // these clones are unacceptable :(
+                self.statement(&body)?;
             } else {
                 break;
             }
@@ -273,7 +276,7 @@ impl Interpreter {
         Ok(())
     }
 
-    fn block(&mut self, statements: Vec<Located<Statement>>) -> Result<(), Located<Error>> {
+    fn block(&mut self, statements: &Vec<Located<Statement>>) -> Result<(), Located<Error>> {
         for statement in statements {
             self.statement(statement)?;
         }
@@ -282,40 +285,36 @@ impl Interpreter {
 
     pub fn evaluate(
         &mut self,
-        expression: Located<Expression>,
+        expression: &Located<Expression>,
     ) -> Result<Cow<Value>, Located<Error>> {
         let location = expression.location();
-        match expression.item {
+        match &expression.item {
             Expression::Literal(literal_token) => self
-                .literal(literal_token)
+                .literal(&literal_token)
                 .as_owned()
                 .with_err_at(Error::InvalidLiteral, &location),
             Expression::Variable(name) => self
-                .variable(name)
+                .variable(name.to_owned())
                 .with_err_at(Error::VariableResolution, &location),
             Expression::Assignment(name, sub_expression) => self
-                .assignment(name, sub_expression.as_deref())
+                .assignment(name.clone(), sub_expression) // clone is necessary, because variable reassignment may occur
                 .with_err_at(Error::AssignmentEvaluation, &location),
-            Expression::Grouping(sub_expression) => self.evaluate(sub_expression.as_deref()),
+            Expression::Grouping(sub_expression) => self.evaluate(&sub_expression),
             Expression::Unary(unary_operator, unary_expr) => self
-                .unary(unary_operator, unary_expr.as_deref())
+                .unary(&unary_operator, &unary_expr)
                 .as_owned()
                 .with_err_at(Error::UnaryEvaluation, &location),
             Expression::Binary(binary_operator, lhs_expr, rhs_expr) => self
-                .binary(binary_operator, lhs_expr.as_deref(), rhs_expr.as_deref())
+                .binary(&binary_operator, &lhs_expr, &rhs_expr)
                 .with_err_at(Error::BinaryEvaluation, &location),
             Expression::Ternary(condition_expr, true_branch_expr, false_branch_expr) => self
-                .ternary(
-                    condition_expr.as_deref(),
-                    true_branch_expr.as_deref(),
-                    false_branch_expr.as_deref(),
-                )
+                .ternary(&condition_expr, &true_branch_expr, &false_branch_expr)
                 .with_err_at(Error::TernaryEvaluation, &location),
         }
     }
 
-    fn literal(&mut self, literal: Located<Token>) -> Result<Value, Token> {
-        literal.item.try_into()
+    fn literal(&mut self, literal: &Located<Token>) -> Result<Value, Token> {
+        literal.item.clone().try_into() // must clone the literal to resolve its value
     }
 
     fn variable(&mut self, name: String) -> Result<Cow<Value>, Error> {
@@ -331,7 +330,7 @@ impl Interpreter {
     fn assignment<'a>(
         &'a mut self,
         name: Located<String>,
-        expression: Located<Expression>,
+        expression: &Located<Expression>,
     ) -> Result<Cow<'a, Value>, Located<Error>> {
         let (location, name) = name.split();
         let value = self.evaluate(expression)?.into_owned(); // own must occur in order to store the value
@@ -348,26 +347,26 @@ impl Interpreter {
 
     fn unary(
         &mut self,
-        unary: Located<Token>,
-        unary_expr: Located<Expression>,
+        unary: &Located<Token>,
+        unary_expr: &Located<Expression>,
     ) -> Result<Value, Located<Error>> {
         let location = unary.location();
         let value = self.evaluate(unary_expr)?;
-        match (unary.item, value.borrow()) {
+        match (&unary.item, value.borrow()) {
             (Token::Minus, Value::Number(value)) => Ok(Value::Number(-value)),
             (Token::Bang, operand) => {
                 let bool_value: bool = operand.into();
                 Ok((!bool_value).into())
             }
-            (unary, _) => Err(Error::InvalidUnary(unary, value.into_owned()).at(&location)), // error contents must be owned
+            (unary, _) => Err(Error::InvalidUnary(unary.clone(), value.into_owned()).at(&location)), // error contents must be owned
         }
     }
 
     fn binary(
         &mut self,
-        binary: Located<Token>,
-        lhs_expr: Located<Expression>,
-        rhs_expr: Located<Expression>,
+        binary: &Located<Token>,
+        lhs_expr: &Located<Expression>,
+        rhs_expr: &Located<Expression>,
     ) -> Result<Cow<Value>, Located<Error>> {
         let binary_location = binary.location();
         let lhs_location = lhs_expr.location();
@@ -398,7 +397,7 @@ impl Interpreter {
             _ => (),
         }
 
-        match (lhs_value.borrow(), binary.item, rhs_value.borrow()) {
+        match (lhs_value.borrow(), &binary.item, rhs_value.borrow()) {
             // equality
             (lhs, Token::EqualEqual, rhs) => Ok(Cow::Owned((lhs == rhs).into())),
             (lhs, Token::BangEqual, rhs) => Ok(Cow::Owned((lhs != rhs).into())),
@@ -466,7 +465,7 @@ impl Interpreter {
             // invalid
             (_, operator, _) => {
                 Err(
-                    Error::InvalidBinary(lhs_value, operator, rhs_value.into_owned())
+                    Error::InvalidBinary(lhs_value, operator.clone(), rhs_value.into_owned())
                         .at(&binary_location),
                 ) // error contents must be owned
             }
@@ -475,9 +474,9 @@ impl Interpreter {
 
     fn ternary(
         &mut self,
-        condition_expr: Located<Expression>,
-        true_branch_expr: Located<Expression>,
-        false_branch_expr: Located<Expression>,
+        condition_expr: &Located<Expression>,
+        true_branch_expr: &Located<Expression>,
+        false_branch_expr: &Located<Expression>,
     ) -> Result<Cow<Value>, Located<Error>> {
         let condition_value = self.evaluate(condition_expr)?;
         let condition_bool: &Value = condition_value.borrow();

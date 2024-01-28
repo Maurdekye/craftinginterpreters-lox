@@ -62,18 +62,18 @@ pub enum Error {
 pub enum Expression {
     Literal(Located<Token>),
     Variable(String),
-    Assignment(Located<String>, Located<Box<Expression>>),
-    Grouping(Located<Box<Expression>>),
-    Unary(Located<Token>, Located<Box<Expression>>),
+    Assignment(Located<String>, Box<Located<Expression>>),
+    Grouping(Box<Located<Expression>>),
+    Unary(Located<Token>, Box<Located<Expression>>),
     Binary(
         Located<Token>,
-        Located<Box<Expression>>,
-        Located<Box<Expression>>,
+        Box<Located<Expression>>,
+        Box<Located<Expression>>,
     ),
     Ternary(
-        Located<Box<Expression>>,
-        Located<Box<Expression>>,
-        Located<Box<Expression>>,
+        Box<Located<Expression>>,
+        Box<Located<Expression>>,
+        Box<Located<Expression>>,
     ),
 }
 
@@ -83,30 +83,15 @@ impl Display for Expression {
             Expression::Literal(Located { item: token, .. }) => write!(f, "{token}"),
             Expression::Variable(name) => write!(f, "(ref {name})"),
             Expression::Assignment(name, expr) => write!(f, "(var {name} {expr})"),
-            Expression::Grouping(Located { item: expr, .. }) => write!(f, "(group {expr})"),
+            Expression::Grouping(expr) => write!(f, "(group {})", expr.item),
             Expression::Unary(Located { item: token, .. }, expr) => write!(f, "({token} {expr})"),
             Expression::Binary(Located { item: token, .. }, lhs, rhs) => {
                 write!(f, "({token} {lhs} {rhs})")
             }
-            Expression::Ternary(
-                Located { item: cond, .. },
-                Located {
-                    item: true_expr, ..
-                },
-                Located {
-                    item: false_expr, ..
-                },
-            ) => {
-                write!(f, "(? {cond} {true_expr} {false_expr})")
+            Expression::Ternary(condition, true_expr, false_expr) => {
+                write!(f, "(? {} {} {})", condition.item, true_expr.item, false_expr.item)
             }
         }
-    }
-}
-
-impl From<Located<Expression>> for Located<Box<Expression>> {
-    fn from(value: Located<Expression>) -> Self {
-        let location = value.location();
-        Box::new(value.item).at(&location)
     }
 }
 
