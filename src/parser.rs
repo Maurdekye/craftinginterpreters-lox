@@ -12,16 +12,9 @@ use crate::{
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
-    #[error("In this ternary:\n{0}")]
-    TernaryParse(Box<MaybeLocated<Error>>),
-    #[error("In this binary expression:\n{0}")]
-    BinaryParse(Box<MaybeLocated<Error>>),
-    #[error("At this unary operator:\n{0}")]
-    UnaryParse(Box<MaybeLocated<Error>>),
-    #[error("In this assignment:\n{0}")]
-    AssignmentParse(Box<MaybeLocated<Error>>),
-
-    #[error("In this while statement:\n{0}")]
+    #[error("In this for loop:\n{0}")]
+    ForParse(Box<MaybeLocated<Error>>),
+    #[error("In this while loop:\n{0}")]
     WhileParse(Box<MaybeLocated<Error>>),
     #[error("In this if statement:\n{0}")]
     IfParse(Box<MaybeLocated<Error>>),
@@ -34,6 +27,19 @@ pub enum Error {
     #[error("In this statement:\n{0}")]
     ExpressionStatementParse(Box<MaybeLocated<Error>>),
 
+    #[error("In this ternary:\n{0}")]
+    TernaryParse(Box<MaybeLocated<Error>>),
+    #[error("In this binary expression:\n{0}")]
+    BinaryParse(Box<MaybeLocated<Error>>),
+    #[error("At this unary operator:\n{0}")]
+    UnaryParse(Box<MaybeLocated<Error>>),
+    #[error("In this assignment:\n{0}")]
+    AssignmentParse(Box<MaybeLocated<Error>>),
+
+    #[error("You forgot a '('")]
+    MissingOpenParen,
+    #[error("You forgot a ')'")]
+    MissingClosingParen,
     #[error("Where's the variable name?")]
     MissingVarIdentifier,
     #[error("You forgot a '}}'")]
@@ -89,7 +95,11 @@ impl Display for Expression {
                 write!(f, "({token} {lhs} {rhs})")
             }
             Expression::Ternary(condition, true_expr, false_expr) => {
-                write!(f, "(? {} {} {})", condition.item, true_expr.item, false_expr.item)
+                write!(
+                    f,
+                    "(? {} {} {})",
+                    condition.item, true_expr.item, false_expr.item
+                )
             }
         }
     }
@@ -101,7 +111,7 @@ pub enum Statement {
     If(
         Located<Expression>,
         Box<Located<Statement>>,
-        Option<Box<Located<Statement>>>,
+        Box<Option<Located<Statement>>>,
     ),
     While(Located<Expression>, Box<Located<Statement>>),
     Expression(Located<Expression>),
@@ -130,7 +140,7 @@ impl Display for Statement {
             Statement::If(condition, true_branch, false_branch) => {
                 writeln!(f, "(if {condition}")?;
                 write!(f, "  {true_branch}")?;
-                if let Some(false_branch) = false_branch {
+                if let Some(false_branch) = false_branch.as_ref() {
                     write!(f, "  {false_branch}")?;
                 }
                 writeln!(f, ")")
@@ -147,6 +157,10 @@ impl Display for Statement {
 type ExpressionParseResult = Result<Located<Expression>, MaybeLocated<Error>>;
 type StatementParseResult = Result<Located<Statement>, MaybeLocated<Error>>;
 type StatementParseResultErrors = Result<Located<Statement>, Errors<MaybeLocated<Error>>>;
+
+fn end_of_stream<T>() -> Result<T, MaybeLocated<Error>> {
+    Err(Error::UnexpectedEndOfTokenStream.unlocated())
+}
 
 fn synchronize(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) {
     while let Some(_) = tokens.next_if(|token| {
@@ -237,7 +251,7 @@ fn declaration(
                 _ => statement(tokens),
             }
         }
-        None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
+        None => end_of_stream(),
     }
 }
 
@@ -269,31 +283,34 @@ fn var(
             let token_location = unexpected_token.location();
             Err(Error::UnexpectedToken(unexpected_token.item).located_at(&token_location))
         }
-        None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
+        None => end_of_stream(),
     }
 }
 
 fn statement(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> StatementParseResult {
     match tokens.peek() {
         Some(located_token) => {
-            let location = located_token.location();
+            let location = &located_token.location();
             match located_token.item {
                 Token::If => {
-                    if_statement(tokens, &location).with_err_located_at(Error::IfParse, &location)
+                    if_statement(tokens, location).with_err_located_at(Error::IfParse, location)
                 }
-                Token::While => while_statement(tokens, &location)
-                    .with_err_located_at(Error::WhileParse, &location),
+                Token::While => while_statement(tokens, location)
+                    .with_err_located_at(Error::WhileParse, location),
+                Token::For => {
+                    for_statement(tokens).with_err_located_at(Error::ForParse, location)
+                }
                 Token::Print => {
-                    print(tokens, &location).with_err_located_at(Error::PrintParse, &location)
+                    print(tokens, location).with_err_located_at(Error::PrintParse, location)
                 }
                 Token::LeftBrace => {
-                    block(tokens, &location).with_err_located_at(Error::BlockParse, &location)
+                    block(tokens, location).with_err_located_at(Error::BlockParse, location)
                 }
                 _ => expression_statement(tokens)
-                    .with_err_located_at(Error::ExpressionStatementParse, &location),
+                    .with_err_located_at(Error::ExpressionStatementParse, location),
             }
         }
-        None => Err(Error::UnexpectedEndOfTokenStream.unlocated()),
+        None => end_of_stream(),
     }
 }
 
@@ -305,11 +322,11 @@ fn if_statement(
     let condition = expression(tokens)?;
     let true_branch = statement(tokens)?;
     let false_branch = if let Some(_) = tokens.next_if(|t| matches!(t.item, Token::Else)) {
-        Some(statement(tokens)?.into())
+        Some(statement(tokens)?)
     } else {
         None
     };
-    Ok(Statement::If(condition, true_branch.into(), false_branch).at(if_location))
+    Ok(Statement::If(condition, true_branch.into(), false_branch.into()).at(if_location))
 }
 
 fn while_statement(
@@ -320,6 +337,80 @@ fn while_statement(
     let condition = expression(tokens)?;
     let body = statement(tokens)?;
     Ok(Statement::While(condition, body.into()).at(while_location))
+}
+
+fn for_statement(
+    tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>
+) -> StatementParseResult {
+    tokens.next();
+    consume(
+        tokens,
+        |t| matches!(t, Token::LeftParen),
+        || Error::MissingOpenParen,
+    )?;
+
+    // parse individual pieces
+    let initializer = match tokens.peek() {
+        Some(located_token) => {
+            let location = &located_token.location();
+            match located_token.item {
+                Token::Semicolon => {
+                    tokens.next();
+                    None
+                }
+                Token::Var => Some(var(tokens, location)?),
+                _ => Some(expression_statement(tokens)?),
+            }
+        }
+        None => return end_of_stream(),
+    };
+    let condition = if tokens
+        .next_if(|t| matches!(t.item, Token::Semicolon))
+        .is_none()
+    {
+        let condition = Some(expression(tokens)?);
+        consume(
+            tokens,
+            |t| matches!(t, Token::Semicolon),
+            || Error::MissingSemicolon,
+        )?;
+        condition
+    } else {
+        None
+    };
+    let increment = if tokens
+        .next_if(|t| matches!(t.item, Token::RightParen))
+        .is_none()
+    {
+        let increment = Some(expression(tokens)?);
+        consume(
+            tokens,
+            |t| matches!(t, Token::RightParen),
+            || Error::MissingClosingParen,
+        )?;
+        increment
+    } else {
+        None
+    };
+    let mut body = statement(tokens)?;
+    let body_location = body.location();
+
+    // construct final ast
+    if let Some(increment) = increment {
+        let increment_location = increment.location();
+        body = Statement::Block(vec![
+            body,
+            Statement::Expression(increment).at(&increment_location),
+        ])
+        .at(&body_location);
+    }
+    let condition =
+        condition.unwrap_or(Expression::Literal(Token::True.at(&body_location)).at(&body_location));
+    let mut loop_body = Statement::While(condition, Box::new(body)).at(&body_location);
+    if let Some(initializer) = initializer {
+        loop_body = Statement::Block(vec![initializer, loop_body]).at(&body_location);
+    }
+    Ok(loop_body)
 }
 
 fn print(
@@ -527,7 +618,7 @@ fn unary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> Express
 
 fn primary(tokens: &mut Peekable<impl Iterator<Item = Located<Token>>>) -> ExpressionParseResult {
     let Some(next_token) = tokens.next() else {
-        return Err(Error::UnexpectedEndOfTokenStream.unlocated());
+        return end_of_stream();
     };
     let location = next_token.location();
 

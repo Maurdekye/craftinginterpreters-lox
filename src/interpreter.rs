@@ -198,7 +198,7 @@ impl Interpreter {
         let location = &statement.location();
         match &statement.item {
             Statement::If(condition, true_branch, false_branch) => {
-                self.if_statement(condition, true_branch.as_ref(), false_branch.as_deref())
+                self.if_statement(condition, true_branch.as_ref(), false_branch.as_ref())
                     .with_err_at(Error::IfEvaluation, location)?;
             }
             Statement::While(condition, body) => {
@@ -247,11 +247,13 @@ impl Interpreter {
         &mut self,
         condition: &Located<Expression>,
         true_branch: &Located<Statement>,
-        false_branch: Option<&Located<Statement>>,
+        false_branch: &Option<Located<Statement>>,
     ) -> Result<(), Located<Error>> {
-        let condition_value = self.evaluate(condition)?;
-        let condition_value: &Value = condition_value.borrow();
-        if condition_value.into() {
+        if {
+            let condition_value = self.evaluate(condition)?;
+            let condition_value: &Value = condition_value.borrow();
+            condition_value.into()
+        } {
             self.statement(true_branch)?;
         } else if let Some(false_branch) = false_branch {
             self.statement(false_branch)?;
@@ -264,14 +266,12 @@ impl Interpreter {
         condition: &Located<Expression>,
         body: &Located<Statement>,
     ) -> Result<(), Located<Error>> {
-        loop {
+        while {
             let condition_value = self.evaluate(condition)?;
             let condition_value: &Value = condition_value.borrow();
-            if condition_value.into() {
-                self.statement(body)?;
-            } else {
-                break;
-            }
+            condition_value.into()
+        } {
+            self.statement(body)?;
         }
         Ok(())
     }
