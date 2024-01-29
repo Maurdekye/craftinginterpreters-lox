@@ -127,24 +127,33 @@ impl Function {
     ) -> ExpressionEvalResult {
         match &self.implementation {
             FunctionImplementation::User(parameters, body) => {
+                // new scope for function body
                 interpreter.environment.push();
+
+                // register parameters as variables in the function body
                 for (name, value) in parameters.iter().zip(args) {
                     interpreter
                         .environment
                         .entry(name.item.clone())
                         .insert(value);
                 }
+
+                // eval function and expect a return value
                 let return_val = match interpreter.statement(body) {
                     Err(MaybeWithSignal::WithSignal(_, Signal::Return(value))) => {
                         Ok(value.unwrap_or(Value::Nil))
                     }
                     other => other.map(|_| Value::Nil),
                 };
+
+                // pop function body's scope
                 interpreter
                     .environment
                     .pop()
                     .expect("Will always have just pushed a scope");
-                Ok(return_val?)
+
+                // return result
+                return_val
             }
             FunctionImplementation::Clock => {
                 return Ok(Value::Number(
@@ -367,16 +376,22 @@ impl Interpreter {
         let location = &statement.location();
         match &statement.item {
             Statement::Break => {
-                return Err(MaybeWithSignal::WithSignal(
-                    Error::InvalidBreak.at(location),
-                    Signal::Break,
-                ))
+                return Err(Error::InvalidBreak.at(location).signaling(Signal::Break))
             }
             Statement::Continue => {
-                return Err(MaybeWithSignal::WithSignal(
-                    Error::InvalidContinue.at(location),
-                    Signal::Continue,
-                ))
+                return Err(Error::InvalidContinue
+                    .at(location)
+                    .signaling(Signal::Continue))
+            }
+            Statement::Return(value) => {
+                let return_value = value
+                    .as_ref()
+                    .map(|value| self.evaluate(value))
+                    .transpose()
+                    .map(|ok| ok.map(Cow::into_owned))?; // return value of function must be owned
+                return Err(Error::InvalidReturn
+                    .at(location)
+                    .signaling(Signal::Return(return_value)));
             }
             Statement::If(condition, true_branch, false_branch) => {
                 self.if_statement(condition, true_branch.as_ref(), false_branch.as_ref())

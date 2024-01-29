@@ -1,4 +1,7 @@
-use std::{fmt::{Debug, Display}, rc::Rc};
+use std::{
+    fmt::{Debug, Display},
+    rc::Rc,
+};
 
 use thiserror::Error as ThisError;
 
@@ -142,6 +145,7 @@ pub enum Statement {
     While(Located<Expression>, Box<Located<Statement>>),
     Break,
     Continue,
+    Return(Option<Located<Expression>>),
 }
 
 impl Display for Statement {
@@ -193,6 +197,10 @@ impl Display for Statement {
             Statement::Continue => {
                 writeln!(f, "continue")
             }
+            Statement::Return(value) => match value {
+                Some(value) => writeln!(f, "(return {})", value.item),
+                None => writeln!(f, "return"),
+            },
         }
     }
 }
@@ -431,6 +439,17 @@ where
                     self.tokens.next();
                     self.consume_semicolon()?;
                     Ok(Statement::Continue.at(location))
+                }
+                Token::Return => {
+                    self.tokens.next();
+                    let value = if self.consume_semicolon().is_err() {
+                        let expression = self.expression()?;
+                        self.consume_semicolon()?;
+                        Some(expression)
+                    } else {
+                        None
+                    };
+                    Ok(Statement::Return(value).at(location))
                 }
                 Token::If => self.if_statement(location).with_err_located_at(Error::IfParse, location),
                 Token::While => {
