@@ -5,7 +5,7 @@ use std::{
     process::{ExitCode, Termination},
 };
 
-use interpreter::Value;
+use interpreter::{MaybeWithSignal, Value};
 use lexer::Tokens;
 use thiserror::Error as ThisError;
 
@@ -91,7 +91,11 @@ fn eval_with(source: String, interpreter: &mut Interpreter) -> Result<Value, Err
     let Some(expression) = parser.expression().error_into(&mut errors) else {
         return Err(errors);
     };
-    let Some(value) = interpreter.evaluate(&expression).error_into(&mut errors) else {
+    let Some(value) = interpreter
+        .evaluate(&expression)
+        .map_err(MaybeWithSignal::into_inner)
+        .error_into(&mut errors)
+    else {
         return Err(errors);
     };
     errors.empty_ok(value.into_owned())

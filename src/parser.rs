@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display};
+use std::{fmt::{Debug, Display}, rc::Rc};
 
 use thiserror::Error as ThisError;
 
@@ -127,8 +127,8 @@ impl Display for Expression {
 pub enum Statement {
     Function(
         Located<String>,
-        Vec<Located<String>>,
-        Box<Located<Statement>>,
+        Rc<Vec<Located<String>>>,
+        Rc<Located<Statement>>,
     ),
     Print(Located<Expression>),
     Expression(Located<Expression>),
@@ -254,13 +254,6 @@ macro_rules! split_ref_some_errors {
 
 fn end_of_stream<T>() -> Result<T, MaybeLocated<Error>> {
     Err(Error::UnexpectedEndOfTokenStream.unlocated())
-}
-
-pub fn parse<I: Iterator<Item = Located<Token>>>(
-    tokens: I,
-) -> Result<Vec<Located<Statement>>, Errors<MaybeLocated<Error>>> {
-    let mut parser = Parser::new(tokens);
-    parser.parse()
 }
 
 pub struct Parser<I>
@@ -423,7 +416,7 @@ where
             }
         }
         let body = self.statement()?;
-        Ok(Statement::Function(name.at(location), parameters, body.into()).at(location))
+        Ok(Statement::Function(name.at(location), parameters.into(), body.into()).at(location))
     }
 
     fn statement(&mut self) -> StatementParseResult {
@@ -601,7 +594,7 @@ where
     }
 
     fn assignment_expression(&mut self, expression: Located<Expression>) -> ExpressionParseResult {
-        let (ident_location, expression) = expression.split();
+        let (expression, ident_location) = expression.split();
         let Expression::Variable(name) = expression else {
             return Err(Error::InvalidAssignmentTarget(expression).located_at(&ident_location));
         };

@@ -2,6 +2,7 @@ use std::{
     borrow::{Borrow, Cow},
     collections::{hash_map::Entry, HashMap},
     fmt::Display,
+    rc::Rc,
     time::SystemTime,
 };
 
@@ -11,7 +12,10 @@ use replace_with::replace_with_or_abort;
 use crate::{
     lexer::Token,
     parser::{Expression, Statement},
-    util::{AppendLocatedError, AsOwned, EntryInsert, Locateable, Located, LocatedAt},
+    util::{
+        AppendLocatedError, AppendLocatedErrorWithSignal, AsOwned, EntryInsert, Locateable,
+        Located, LocatedAt, Signaling, SignalingResult,
+    },
 };
 
 use thiserror::Error as ThisError;
@@ -42,8 +46,8 @@ pub enum Error {
     BlockEvaluation(Box<Located<Error>>),
     #[error("In this statement:\n{0}")]
     ExpressionStatementEvaluation(Box<Located<Error>>),
-    #[error("In this function call:\n{0}")]
-    FunctionCall(Box<Located<Error>>),
+    #[error("In this call:\n{0}")]
+    FunctionCall(Box<Located<Error>>), // eventually i hope to include the called function name in here
 
     #[error("Can only call functions and class constructors, not '{0}'")]
     InvalidCallable(Value),
@@ -67,53 +71,124 @@ pub enum Error {
     InvalidLiteral(Token),
 
     #[error("Can't 'break' when not in a loop")]
-    Break,
+    InvalidBreak,
     #[error("Can't 'continue' when not in a loop")]
-    Continue,
+    InvalidContinue,
+    #[error("Can't 'return' outside of a function")]
+    InvalidReturn,
 }
 
-impl Error {
-    pub fn stack_contains(&self, pred: impl Fn(&Error) -> bool) -> Option<&Self> {
-        if pred(&self) {
-            return Some(self);
+#[derive(Clone, Debug)]
+pub enum Signal {
+    Break,
+    Continue,
+    Return(Option<Value>),
+}
+
+#[derive(Clone, Debug)]
+pub enum MaybeWithSignal<T> {
+    NoSignal(T),
+    WithSignal(T, Signal),
+}
+
+impl<T> MaybeWithSignal<T> {
+    pub fn map<V>(self, f: impl FnOnce(T) -> V) -> MaybeWithSignal<V> {
+        match self {
+            MaybeWithSignal::NoSignal(inner) => MaybeWithSignal::NoSignal(f(inner)),
+            MaybeWithSignal::WithSignal(inner, signal) => {
+                MaybeWithSignal::WithSignal(f(inner), signal)
+            }
         }
-        if let Error::AssignmentEvaluation(inner)
-        | Error::BinaryEvaluation(inner)
-        | Error::BlockEvaluation(inner)
-        | Error::UnaryEvaluation(inner)
-        | Error::TernaryEvaluation(inner)
-        | Error::VarEvaluation(inner)
-        | Error::WhileEvaluation(inner)
-        | Error::IfEvaluation(inner)
-        | Error::PrintEvaluation(inner)
-        | Error::ExpressionStatementEvaluation(inner)
-        | Error::FunctionCall(inner) = self
-        {
-            return inner.item.stack_contains(pred);
-        } else if let Error::VariableResolution(inner) = self {
-            return inner.stack_contains(pred);
-        } else {
-            return None;
-        }
+    }
+
+    pub fn into_inner(self) -> T {
+        let (MaybeWithSignal::NoSignal(inner) | MaybeWithSignal::WithSignal(inner, _)) = self;
+        inner
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+macro_rules! wrapping_error_impl {
+    ($pred:expr, $source:ident, ($($wrapper_type:ident),*)) => {
+        $(
+            if let Error::$wrapper_type(inner) = $source {
+                let (inner_err, location) = inner.split();
+                return inner_err.stack_contains($pred).map_err(|err| Error::$wrapper_type(err.at(&location).into()));
+            }
+        )*
+    };
+}
+
+impl Error {
+    pub fn stack_contains(self, pred: impl Fn(&Error) -> bool) -> Result<Self, Self> {
+        if pred(&self) {
+            return Ok(self);
+        }
+        // there has to be a better way to do this but i don't know it atm
+        wrapping_error_impl!(
+            pred,
+            self,
+            (
+                AssignmentEvaluation,
+                BinaryEvaluation,
+                BlockEvaluation,
+                UnaryEvaluation,
+                TernaryEvaluation,
+                VarEvaluation,
+                WhileEvaluation,
+                IfEvaluation,
+                PrintEvaluation,
+                ExpressionStatementEvaluation,
+                FunctionCall
+            )
+        );
+        if let Error::VariableResolution(inner) = self {
+            return inner
+                .stack_contains(pred)
+                .map_err(|err| Error::VariableResolution(err.into()));
+        }
+        return Err(self);
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum FunctionImplementation {
-    User,
+    User(Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
     Clock,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Function {
     arity: usize,
     implementation: FunctionImplementation,
 }
 
 impl Function {
-    pub fn call(&mut self, args: Vec<Value>) -> Result<Value, Located<Error>> {
-        match self.implementation {
-            FunctionImplementation::User => todo!(),
+    pub fn call(
+        &mut self,
+        interpreter: &mut Interpreter,
+        args: Vec<Value>,
+    ) -> ExpressionEvalResult {
+        match &self.implementation {
+            FunctionImplementation::User(parameters, body) => {
+                interpreter.environment.push();
+                for (name, value) in parameters.iter().zip(args) {
+                    interpreter
+                        .environment
+                        .entry(name.item.clone())
+                        .insert(value);
+                }
+                let return_val = match interpreter.statement(body) {
+                    Err(MaybeWithSignal::WithSignal(_, Signal::Return(value))) => {
+                        Ok(value.unwrap_or(Value::Nil))
+                    }
+                    other => other.map(|_| Value::Nil),
+                };
+                interpreter
+                    .environment
+                    .pop()
+                    .expect("Will always have just pushed a scope");
+                Ok(return_val?)
+            }
             FunctionImplementation::Clock => {
                 return Ok(Value::Number(
                     SystemTime::now()
@@ -126,27 +201,31 @@ impl Function {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Class;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Callable {
     Function(Function),
     Class(Class),
 }
 
 impl Callable {
-    pub fn call(&mut self, args: Vec<Value>) -> Result<Value, Located<Error>> {
+    pub fn call(
+        &mut self,
+        interpreter: &mut Interpreter,
+        args: Vec<Value>,
+    ) -> ExpressionEvalResult {
         match self {
-            Callable::Function(function) => function.call(args),
-            Callable::Class(class) => todo!(),
+            Callable::Function(function) => function.call(interpreter, args),
+            Callable::Class(_class) => todo!(),
         }
     }
 
     pub fn arity(&self) -> usize {
         match self {
             Callable::Function(function) => function.arity,
-            Callable::Class(class) => todo!(),
+            Callable::Class(_class) => todo!(),
         }
     }
 }
@@ -163,7 +242,7 @@ impl TryFrom<Value> for Callable {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Value {
     Function(Function),
     Class(Class),
@@ -173,6 +252,18 @@ pub enum Value {
     False,
     Nil,
     Uninitialized,
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Function(_), Self::Function(_)) => false,
+            (Self::Class(_), Self::Class(_)) => false,
+            (Self::String(l0), Self::String(r0)) => l0 == r0,
+            (Self::Number(l0), Self::Number(r0)) => l0 == r0,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
 }
 
 impl From<bool> for Value {
@@ -197,8 +288,8 @@ impl Into<bool> for &Value {
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Function(f) => todo!("implement functions first"),
-            Value::Class(c) => todo!("implement classes first"),
+            Value::Function(_f) => todo!("implement functions first"),
+            Value::Class(_c) => todo!("implement classes first"),
             Value::String(s) => write!(f, "\"{s}\""),
             Value::Number(n) => write!(f, "{n}"),
             Value::True => write!(f, "true"),
@@ -281,6 +372,11 @@ impl Environment {
 #[error("Already at global scope")]
 pub struct AtGlobalScopeError;
 
+type EvalError = MaybeWithSignal<Located<Error>>;
+type StatementEvalResult = Result<(), EvalError>;
+type ExpressionEvalResult = Result<Value, EvalError>;
+type ExpressionEvalResultCow<'a> = Result<Cow<'a, Value>, EvalError>;
+
 pub struct Interpreter {
     environment: Environment,
 }
@@ -304,28 +400,39 @@ impl Interpreter {
         statements: &Vec<Located<Statement>>,
     ) -> Result<(), Located<Error>> {
         for statement in statements {
-            self.statement(statement)?;
+            self.statement(statement)
+                .map_err(MaybeWithSignal::into_inner)?;
         }
         Ok(())
     }
 
-    fn statement(&mut self, statement: &Located<Statement>) -> Result<(), Located<Error>> {
+    fn statement(&mut self, statement: &Located<Statement>) -> StatementEvalResult {
         let location = &statement.location();
         match &statement.item {
-            Statement::Break => return Err(Error::Break.at(location)),
-            Statement::Continue => return Err(Error::Continue.at(location)),
+            Statement::Break => {
+                return Err(MaybeWithSignal::WithSignal(
+                    Error::InvalidBreak.at(location),
+                    Signal::Break,
+                ))
+            }
+            Statement::Continue => {
+                return Err(MaybeWithSignal::WithSignal(
+                    Error::InvalidContinue.at(location),
+                    Signal::Continue,
+                ))
+            }
             Statement::If(condition, true_branch, false_branch) => {
                 self.if_statement(condition, true_branch.as_ref(), false_branch.as_ref())
-                    .with_err_at(Error::IfEvaluation, location)?;
+                    .with_maybe_signaled_err_at(Error::IfEvaluation, location)?;
             }
             Statement::While(condition, body) => {
                 self.while_statement(condition, body.as_ref())
-                    .with_err_at(Error::WhileEvaluation, location)?;
+                    .with_maybe_signaled_err_at(Error::WhileEvaluation, location)?;
             }
             Statement::Print(expression) => {
                 let result = self
                     .evaluate(expression)
-                    .with_err_at(Error::PrintEvaluation, location)?;
+                    .with_maybe_signaled_err_at(Error::PrintEvaluation, location)?;
                 let repr: Cow<'_, String> = match result.borrow() {
                     Value::String(s) => Cow::Borrowed(s),
                     value => Cow::Owned(format!("{value}")),
@@ -334,13 +441,13 @@ impl Interpreter {
             }
             Statement::Expression(expression) => {
                 self.evaluate(expression)
-                    .with_err_at(Error::ExpressionStatementEvaluation, location)?;
+                    .with_maybe_signaled_err_at(Error::ExpressionStatementEvaluation, location)?;
             }
             Statement::Var(name, maybe_initializer) => {
                 let value = match maybe_initializer {
                     Some(expression) => self
                         .evaluate(expression)
-                        .with_err_at(Error::VarEvaluation, location)?
+                        .with_maybe_signaled_err_at(Error::VarEvaluation, location)?
                         .into_owned(), // own must occur in order to store the value
                     None => Value::Uninitialized,
                 };
@@ -350,12 +457,19 @@ impl Interpreter {
                 self.environment.push();
                 let result = self
                     .block(statements)
-                    .with_err_at(Error::BlockEvaluation, location);
+                    .with_maybe_signaled_err_at(Error::BlockEvaluation, location);
                 self.environment
                     .pop()
                     .expect("Will always have just pushed a scope");
                 result?;
             }
+            Statement::Function(name, parameters, body) => self
+                .environment
+                .entry(name.item.clone())
+                .insert(Value::Function(Function {
+                    arity: parameters.len(),
+                    implementation: FunctionImplementation::User(parameters.clone(), body.clone()), // rc clones, cheap
+                })),
         }
         Ok(())
     }
@@ -365,7 +479,7 @@ impl Interpreter {
         condition: &Located<Expression>,
         true_branch: &Located<Statement>,
         false_branch: &Option<Located<Statement>>,
-    ) -> Result<(), Located<Error>> {
+    ) -> StatementEvalResult {
         if {
             let condition_value = self.evaluate(condition)?;
             let condition_value: &Value = condition_value.borrow();
@@ -382,66 +496,58 @@ impl Interpreter {
         &mut self,
         condition: &Located<Expression>,
         body: &Located<Statement>,
-    ) -> Result<(), Located<Error>> {
+    ) -> StatementEvalResult {
         while {
             let condition_value = self.evaluate(condition)?;
             let condition_value: &Value = condition_value.borrow();
             condition_value.into()
         } {
-            // this feels hacky but it's the cleanest way to do it with the current architecture :/
             match self.statement(body) {
-                Err(error) => match error
-                    .item
-                    .stack_contains(|t| matches!(t, Error::Break | Error::Continue))
-                {
-                    Some(Error::Break) => break,
-                    Some(Error::Continue) => continue,
-                    _ => (),
-                },
-                Ok(()) => (),
+                Err(MaybeWithSignal::WithSignal(_, Signal::Break)) => break,
+                Err(MaybeWithSignal::WithSignal(_, Signal::Continue)) => continue,
+                other => other?,
             }
         }
         Ok(())
     }
 
-    fn block(&mut self, statements: &Vec<Located<Statement>>) -> Result<(), Located<Error>> {
+    fn block(&mut self, statements: &Vec<Located<Statement>>) -> StatementEvalResult {
         for statement in statements {
             self.statement(statement)?;
         }
         Ok(())
     }
 
-    pub fn evaluate(
-        &mut self,
-        expression: &Located<Expression>,
-    ) -> Result<Cow<Value>, Located<Error>> {
+    pub fn evaluate(&mut self, expression: &Located<Expression>) -> ExpressionEvalResultCow<'_> {
         let location = &expression.location();
         match &expression.item {
             Expression::Literal(literal_token) => self
                 .literal(literal_token)
                 .as_owned()
-                .with_err_at(Error::InvalidLiteral, location),
+                .with_err_at(Error::InvalidLiteral, location)
+                .map_err(MaybeWithSignal::NoSignal),
             Expression::Variable(name) => self
                 .variable(name.to_owned())
-                .with_err_at(Error::VariableResolution, location),
+                .with_err_at(Error::VariableResolution, location)
+                .map_err(MaybeWithSignal::NoSignal),
             Expression::Assignment(name, sub_expression) => self
                 .assignment(name.clone(), sub_expression) // clone is necessary, because variable reassignment may occur
-                .with_err_at(Error::AssignmentEvaluation, location),
+                .with_maybe_signaled_err_at(Error::AssignmentEvaluation, location),
             Expression::Grouping(sub_expression) => self.evaluate(sub_expression),
             Expression::Unary(unary_operator, unary_expr) => self
                 .unary(unary_operator, unary_expr)
                 .as_owned()
-                .with_err_at(Error::UnaryEvaluation, location),
+                .with_maybe_signaled_err_at(Error::UnaryEvaluation, location),
             Expression::Binary(binary_operator, lhs_expr, rhs_expr) => self
                 .binary(binary_operator, lhs_expr, rhs_expr)
-                .with_err_at(Error::BinaryEvaluation, location),
+                .with_maybe_signaled_err_at(Error::BinaryEvaluation, location),
             Expression::Ternary(condition_expr, true_branch_expr, false_branch_expr) => self
                 .ternary(condition_expr, true_branch_expr, false_branch_expr)
-                .with_err_at(Error::TernaryEvaluation, location),
+                .with_maybe_signaled_err_at(Error::TernaryEvaluation, location),
             Expression::Call(function, arguments) => self
                 .call(function.as_ref(), &arguments[..])
                 .as_owned()
-                .with_err_at(Error::FunctionCall, location),
+                .with_maybe_signaled_err_at(Error::FunctionCall, location),
         }
     }
 
@@ -463,13 +569,13 @@ impl Interpreter {
         &'a mut self,
         name: Located<String>,
         expression: &Located<Expression>,
-    ) -> Result<Cow<'a, Value>, Located<Error>> {
-        let (location, name) = name.split();
+    ) -> ExpressionEvalResultCow<'a> {
+        let (name, location) = name.split();
         let value = self.evaluate(expression)?.into_owned(); // own must occur in order to store the value
         match self.environment.entry(name) {
-            Entry::Vacant(vacant) => {
-                Err(Error::UndeclaredVariable(vacant.into_key()).at(&location))
-            }
+            Entry::Vacant(vacant) => Err(Error::UndeclaredVariable(vacant.into_key())
+                .at(&location)
+                .no_signal()),
             Entry::Occupied(mut entry) => {
                 entry.insert(value);
                 Ok(Cow::Borrowed(entry.into_mut())) // everything is cows so that i can write this line here :>
@@ -481,7 +587,7 @@ impl Interpreter {
         &mut self,
         unary: &Located<Token>,
         unary_expr: &Located<Expression>,
-    ) -> Result<Value, Located<Error>> {
+    ) -> ExpressionEvalResult {
         let location = unary.location();
         let value = self.evaluate(unary_expr)?;
         match (&unary.item, value.borrow()) {
@@ -490,7 +596,9 @@ impl Interpreter {
                 let bool_value: bool = operand.into();
                 Ok((!bool_value).into())
             }
-            (unary, _) => Err(Error::InvalidUnary(unary.clone(), value.into_owned()).at(&location)), // error contents must be owned
+            (unary, _) => Err(Error::InvalidUnary(unary.clone(), value.into_owned())
+                .at(&location)
+                .no_signal()), // error contents must be owned
         }
     }
 
@@ -498,18 +606,21 @@ impl Interpreter {
         &mut self,
         function: &Located<Expression>,
         arguments: &[Located<Expression>],
-    ) -> Result<Value, Located<Error>> {
+    ) -> ExpressionEvalResult {
         let location = function.location();
         let function = self.evaluate(function)?.into_owned(); // must own function before calling it
 
         // check if callable
         let mut function: Callable = function
             .try_into()
-            .with_err_at(Error::InvalidCallable, &location)?;
+            .with_err_at(Error::InvalidCallable, &location)
+            .err_no_signal()?;
 
         // check arity
         if arguments.len() != function.arity() {
-            return Err(Error::IncorrectArity(function.arity(), arguments.len()).at(&location));
+            return Err(Error::IncorrectArity(function.arity(), arguments.len())
+                .at(&location)
+                .no_signal());
         }
 
         // collect arguments
@@ -519,7 +630,7 @@ impl Interpreter {
         }
 
         // call function
-        function.call(argument_values)
+        function.call(self, argument_values)
     }
 
     fn binary(
@@ -527,25 +638,24 @@ impl Interpreter {
         binary: &Located<Token>,
         lhs_expr: &Located<Expression>,
         rhs_expr: &Located<Expression>,
-    ) -> Result<Cow<Value>, Located<Error>> {
+    ) -> ExpressionEvalResultCow<'_> {
         let binary_location = binary.location();
         let lhs_location = lhs_expr.location();
 
         let mut this = self; // cannot use polonius_the_crab on `self`
 
-        let (lhs_truthiness, lhs_value) =
-            polonius!(|this| -> Result<Cow<'polonius, Value>, Located<Error>> {
-                let lhs_value = polonius_try!(this.evaluate(lhs_expr));
+        let (lhs_truthiness, lhs_value) = polonius!(|this| -> ExpressionEvalResultCow<'polonius> {
+            let lhs_value = polonius_try!(this.evaluate(lhs_expr));
 
-                // match short circuit boolean operations before evaluating right hand side
-                let lhs_borrow: &Value = lhs_value.borrow();
-                match (lhs_borrow.into(), &binary.item) {
-                    (false, Token::And) | (true, Token::Or) => {
-                        polonius_return!(Ok(lhs_value));
-                    }
-                    (lhs_truthiness, _) => exit_polonius!((lhs_truthiness, lhs_value.into_owned())), // this own may not be cheap, but it is unavoidable, because we must also borrow rhs 😔
-                };
-            });
+            // match short circuit boolean operations before evaluating right hand side
+            let lhs_borrow: &Value = lhs_value.borrow();
+            match (lhs_borrow.into(), &binary.item) {
+                (false, Token::And) | (true, Token::Or) => {
+                    polonius_return!(Ok(lhs_value));
+                }
+                (lhs_truthiness, _) => exit_polonius!((lhs_truthiness, lhs_value.into_owned())), // this own may not be cheap, but it is unavoidable, because we must also borrow rhs 😔
+            };
+        });
 
         let rhs_value = this.evaluate(rhs_expr)?;
 
@@ -590,7 +700,9 @@ impl Interpreter {
 
             // arithmetic
             (_, Token::Slash, Value::Number(rhs)) if rhs.borrow() == &0.0 => {
-                Err(Error::DivisionByZero(lhs_value).at(&lhs_location))
+                Err(Error::DivisionByZero(lhs_value)
+                    .at(&lhs_location)
+                    .no_signal())
             }
             (Value::Number(lhs), Token::Minus, Value::Number(rhs)) => {
                 Ok(Cow::Owned(Value::Number(lhs - rhs)))
@@ -626,7 +738,8 @@ impl Interpreter {
             (_, operator, _) => {
                 Err(
                     Error::InvalidBinary(lhs_value, operator.clone(), rhs_value.into_owned())
-                        .at(&binary_location),
+                        .at(&binary_location)
+                        .no_signal(),
                 ) // error contents must be owned
             }
         }
@@ -637,7 +750,7 @@ impl Interpreter {
         condition_expr: &Located<Expression>,
         true_branch_expr: &Located<Expression>,
         false_branch_expr: &Located<Expression>,
-    ) -> Result<Cow<Value>, Located<Error>> {
+    ) -> ExpressionEvalResultCow<'_> {
         let condition_value = self.evaluate(condition_expr)?;
         let condition_bool: &Value = condition_value.borrow();
         if condition_bool.into() {

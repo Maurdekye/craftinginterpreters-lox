@@ -8,6 +8,8 @@ use std::{
     vec,
 };
 
+use crate::interpreter::{MaybeWithSignal, Signal};
+
 pub struct Peekable<I: Iterator> {
     iter: I,
     slot: Option<I::Item>,
@@ -98,13 +100,13 @@ impl<T> Located<T> {
         }
     }
 
-    pub fn split(self) -> (Location, T) {
+    pub fn split(self) -> (T, Location) {
         let Located {
             line,
             character,
             item,
         } = self;
-        (Location { line, character }, item)
+        (item, Location { line, character })
     }
 }
 
@@ -171,6 +173,33 @@ where
 
     fn with_err_at(self, err_factory: F, locateable: &impl Locateable) -> Self::Output {
         self.map_err(|err| err_factory(err.into()).at(locateable))
+    }
+}
+
+/// another duped trait... wish specialization would come soon
+pub trait AppendLocatedErrorWithSignal<F, U, E, T> {
+    type Output;
+
+    fn with_maybe_signaled_err_at(
+        self,
+        err_factory: F,
+        locateable: &impl Locateable,
+    ) -> Self::Output;
+}
+
+impl<V, F, U, E, T> AppendLocatedErrorWithSignal<F, U, E, T> for Result<V, MaybeWithSignal<E>>
+where
+    U: From<E>,
+    F: FnOnce(U) -> T,
+{
+    type Output = Result<V, MaybeWithSignal<Located<T>>>;
+
+    fn with_maybe_signaled_err_at(
+        self,
+        err_factory: F,
+        locateable: &impl Locateable,
+    ) -> Self::Output {
+        self.map_err(|err| err.map(|err| err_factory(err.into()).at(locateable)))
     }
 }
 
@@ -411,5 +440,38 @@ impl<'a, T: Clone + 'a, E> AsOwned<'a> for Result<T, E> {
 
     fn as_owned(self) -> Self::Output {
         self.map(|v| Cow::Owned(v))
+    }
+}
+
+pub trait Signaling: Sized {
+    fn signaling(self, signal: Signal) -> MaybeWithSignal<Self> {
+        MaybeWithSignal::WithSignal(self, signal)
+    }
+
+    fn no_signal(self) -> MaybeWithSignal<Self> {
+        MaybeWithSignal::NoSignal(self)
+    }
+}
+
+impl<T: Sized> Signaling for T {}
+
+pub trait SignalingResult {
+    type SignalingOutput;
+    type NotSignalingOutput;
+
+    fn err_signaling(self, signal: Signal) -> Self::SignalingOutput;
+    fn err_no_signal(self) -> Self::NotSignalingOutput;
+}
+
+impl<T, E: Sized> SignalingResult for Result<T, E> {
+    type SignalingOutput = Result<T, MaybeWithSignal<E>>;
+    type NotSignalingOutput = Result<T, MaybeWithSignal<E>>;
+
+    fn err_signaling(self, signal: Signal) -> Self::SignalingOutput {
+        self.map_err(|e| e.signaling(signal))
+    }
+
+    fn err_no_signal(self) -> Self::NotSignalingOutput {
+        self.map_err(Signaling::no_signal)
     }
 }
