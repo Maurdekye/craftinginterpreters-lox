@@ -40,7 +40,11 @@ pub enum Error {
     BlockEvaluation(Box<Located<Error>>),
     #[error("In this statement:\n{0}")]
     ExpressionStatementEvaluation(Box<Located<Error>>),
+    #[error("In this function call:\n{0}")]
+    FunctionCall(Box<Located<Error>>),
 
+    #[error("Can only call functions and class constructors, not '{0}'")]
+    InvalidCallable(Value),
     #[error("This is supposed to be true or false, but it was '{0}'")]
     InvalidIfCondition(Value),
     #[error("You haven't defined '{0}' yet")]
@@ -65,6 +69,36 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Function;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Class;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Callable {
+    Function(Function),
+    Class(Class),
+}
+
+impl Callable {
+    pub fn call(&mut self, args: Vec<Value>) -> Result<Value, Located<Error>> {
+        todo!()
+    }
+}
+
+impl TryFrom<Value> for Callable {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Function(function) => Ok(Callable::Function(function)),
+            Value::Class(class) => Ok(Callable::Class(class)),
+            other => Err(other),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     String(String),
     Number(f64),
@@ -72,6 +106,8 @@ pub enum Value {
     False,
     Nil,
     Uninitialized,
+    Function(Function),
+    Class(Class),
 }
 
 impl From<bool> for Value {
@@ -96,6 +132,8 @@ impl Into<bool> for &Value {
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Value::Function(f) => todo!("implement functions first"),
+            Value::Class(c) => todo!("implement classes first"),
             Value::String(s) => write!(f, "\"{s}\""),
             Value::Number(n) => write!(f, "{n}"),
             Value::True => write!(f, "true"),
@@ -327,6 +365,10 @@ impl Interpreter {
             Expression::Ternary(condition_expr, true_branch_expr, false_branch_expr) => self
                 .ternary(condition_expr, true_branch_expr, false_branch_expr)
                 .with_err_at(Error::TernaryEvaluation, location),
+            Expression::Call(function, arguments) => self
+                .call(function.as_ref(), &arguments[..])
+                .as_owned()
+                .with_err_at(Error::FunctionCall, location),
         }
     }
 
@@ -377,6 +419,23 @@ impl Interpreter {
             }
             (unary, _) => Err(Error::InvalidUnary(unary.clone(), value.into_owned()).at(&location)), // error contents must be owned
         }
+    }
+
+    fn call(
+        &mut self,
+        function: &Located<Expression>,
+        arguments: &[Located<Expression>],
+    ) -> Result<Value, Located<Error>> {
+        let location = function.location();
+        let function = self.evaluate(function)?.into_owned(); // must evaluate function before calling it
+        let mut function: Callable = function
+            .try_into()
+            .with_err_at(Error::InvalidCallable, &location)?;
+        let mut argument_values = Vec::new();
+        for arg in arguments {
+            argument_values.push(self.evaluate(arg)?.into_owned()); // must own all function arguments before calling function
+        }
+        function.call(argument_values)
     }
 
     fn binary(

@@ -60,6 +60,8 @@ pub enum Error {
     UnexpectedBinaryOperator(Token),
     #[error("This '{0}' doesn't make sense here, it's supposed to be part of a ternary")]
     UnexpectedTernaryOperator(Token),
+    #[error("Function calls can't have more than 255 arguments")]
+    TooManyArguments,
 }
 
 #[derive(Clone, Debug)]
@@ -667,7 +669,11 @@ where
                     args.push(self.expression()?);
                     split_some!(self.tokens.next() => |token, location| {
                         match token {
-                            Token::Comma => (),
+                            Token::Comma => {
+                                if args.len() >= 255 {
+                                    return Err(Error::TooManyArguments.located_at(&location))
+                                }
+                            },
                             Token::RightParen => break,
                             other => {
                                 return Err(Error::UnexpectedArgumentToken(other).located_at(&location))
