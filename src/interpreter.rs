@@ -107,49 +107,6 @@ impl<T> MaybeWithSignal<T> {
     }
 }
 
-macro_rules! wrapping_error_impl {
-    ($pred:expr, $source:ident, ($($wrapper_type:ident),*)) => {
-        $(
-            if let Error::$wrapper_type(inner) = $source {
-                let (inner_err, location) = inner.split();
-                return inner_err.stack_contains($pred).map_err(|err| Error::$wrapper_type(err.at(&location).into()));
-            }
-        )*
-    };
-}
-
-impl Error {
-    pub fn stack_contains(self, pred: impl Fn(&Error) -> bool) -> Result<Self, Self> {
-        if pred(&self) {
-            return Ok(self);
-        }
-        // there has to be a better way to do this but i don't know it atm
-        wrapping_error_impl!(
-            pred,
-            self,
-            (
-                AssignmentEvaluation,
-                BinaryEvaluation,
-                BlockEvaluation,
-                UnaryEvaluation,
-                TernaryEvaluation,
-                VarEvaluation,
-                WhileEvaluation,
-                IfEvaluation,
-                PrintEvaluation,
-                ExpressionStatementEvaluation,
-                FunctionCall
-            )
-        );
-        if let Error::VariableResolution(inner) = self {
-            return inner
-                .stack_contains(pred)
-                .map_err(|err| Error::VariableResolution(err.into()));
-        }
-        return Err(self);
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum FunctionImplementation {
     User(Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
