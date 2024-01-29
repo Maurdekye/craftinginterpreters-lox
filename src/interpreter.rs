@@ -134,7 +134,7 @@ impl Function {
                 for (name, value) in parameters.iter().zip(args) {
                     interpreter
                         .environment
-                        .entry(name.item.clone())
+                        .top_entry(name.item.clone())
                         .insert(value);
                 }
 
