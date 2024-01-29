@@ -474,7 +474,7 @@ where
         let mut statements = Vec::new();
         let mut errors = Errors::new();
         loop {
-            split_ref_some_errors!(self.tokens.next() => |token, location| {
+            split_ref_some_errors!(self.tokens.peek() => |token, location| {
                 match token {
                     Token::RightBrace => {
                         self.tokens.next();

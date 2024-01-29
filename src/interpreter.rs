@@ -71,6 +71,32 @@ pub enum Error {
     Continue,
 }
 
+impl Error {
+    pub fn stack_contains(&self, pred: impl Fn(&Error) -> bool) -> Option<&Self> {
+        if pred(&self) {
+            return Some(self);
+        }
+        if let Error::AssignmentEvaluation(inner)
+        | Error::BinaryEvaluation(inner)
+        | Error::BlockEvaluation(inner)
+        | Error::UnaryEvaluation(inner)
+        | Error::TernaryEvaluation(inner)
+        | Error::VarEvaluation(inner)
+        | Error::WhileEvaluation(inner)
+        | Error::IfEvaluation(inner)
+        | Error::PrintEvaluation(inner)
+        | Error::ExpressionStatementEvaluation(inner)
+        | Error::FunctionCall(inner) = self
+        {
+            return inner.item.stack_contains(pred);
+        } else if let Error::VariableResolution(inner) = self {
+            return inner.stack_contains(pred);
+        } else {
+            return None;
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum FunctionImplementation {
     User,
@@ -363,14 +389,15 @@ impl Interpreter {
         } {
             // this feels hacky but it's the cleanest way to do it with the current architecture :/
             match self.statement(body) {
-                Err(Located {
-                    item: Error::Break, ..
-                }) => break,
-                Err(Located {
-                    item: Error::Continue,
-                    ..
-                }) => continue,
-                result => result?,
+                Err(error) => match error
+                    .item
+                    .stack_contains(|t| matches!(t, Error::Break | Error::Continue))
+                {
+                    Some(Error::Break) => break,
+                    Some(Error::Continue) => continue,
+                    _ => (),
+                },
+                Ok(()) => (),
             }
         }
         Ok(())

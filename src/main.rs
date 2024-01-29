@@ -113,6 +113,7 @@ struct Args {
 
 fn _main() -> Result<(), RootError> {
     let args = Args::parse();
+    // let args = Args::parse_from(["_", "test.lox"]);
 
     match (args.file, args.source) {
         // run code inline
