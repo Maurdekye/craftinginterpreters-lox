@@ -109,7 +109,7 @@ impl<T> MaybeWithSignal<T> {
 
 #[derive(Clone, Debug)]
 pub enum FunctionImplementation {
-    User(Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
+    Lox(Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
     Clock,
 }
 
@@ -126,7 +126,7 @@ impl Function {
         args: Vec<Value>,
     ) -> ExpressionEvalResult {
         match &self.implementation {
-            FunctionImplementation::User(parameters, body) => {
+            FunctionImplementation::Lox(parameters, body) => {
                 // new scope for function body
                 interpreter.environment.push();
 
@@ -140,10 +140,11 @@ impl Function {
 
                 // eval function and expect a return value
                 let return_val = match interpreter.statement(body) {
-                    Err(MaybeWithSignal::WithSignal(_, Signal::Return(value))) => {
-                        Ok(value.unwrap_or(Value::Nil))
+                    Err(MaybeWithSignal::WithSignal(_, Signal::Return(Some(value)))) => Ok(value),
+                    Err(MaybeWithSignal::WithSignal(_, Signal::Return(None))) | Ok(_) => {
+                        Ok(Value::Nil)
                     }
-                    other => other.map(|_| Value::Nil),
+                    Err::<(), _>(err) => Err::<Value, _>(err),
                 };
 
                 // pop function body's scope
@@ -155,14 +156,12 @@ impl Function {
                 // return result
                 return_val
             }
-            FunctionImplementation::Clock => {
-                return Ok(Value::Number(
-                    SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .expect("Unix epoch is always in the past")
-                        .as_secs_f64(),
-                ))
-            }
+            FunctionImplementation::Clock => Ok(Value::Number(
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .expect("Unix epoch is always in the past")
+                    .as_secs_f64(),
+            )),
         }
     }
 }
@@ -440,7 +439,7 @@ impl Interpreter {
                 .entry(name.item.clone())
                 .insert(Value::Function(Function {
                     arity: parameters.len(),
-                    implementation: FunctionImplementation::User(parameters.clone(), body.clone()), // rc clones, cheap
+                    implementation: FunctionImplementation::Lox(parameters.clone(), body.clone()), // rc clones, cheap
                 })),
         }
         Ok(())
