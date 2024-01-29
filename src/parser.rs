@@ -26,6 +26,8 @@ pub enum Error {
     BlockParse(Errors<MaybeLocated<Error>>),
     #[error("In this statement:\n{0}")]
     ExpressionStatementParse(Box<MaybeLocated<Error>>),
+    #[error("In this function declaration:\n{0}")]
+    FunctionDeclarationParse(Box<MaybeLocated<Error>>),
 
     #[error("In this ternary:\n{0}")]
     TernaryParse(Box<MaybeLocated<Error>>),
@@ -42,6 +44,8 @@ pub enum Error {
         "Was expecting a comma or closing paren while reading function arguments, but got a '{0}'"
     )]
     UnexpectedArgumentToken(Token),
+    #[error("Where's the function name?")]
+    MissingFunctionName,
     #[error("Where's the variable name?")]
     MissingVarIdentifier,
     #[error("You forgot a semicolon")]
@@ -62,6 +66,8 @@ pub enum Error {
     UnexpectedTernaryOperator(Token),
     #[error("Function calls can't have more than 255 arguments")]
     TooManyArguments,
+    #[error("Function parameters should be identifiers, not '{0}'")]
+    UnexpectedFunctionParameter(Token),
 }
 
 #[derive(Clone, Debug)]
@@ -119,23 +125,40 @@ impl Display for Expression {
 
 #[derive(Clone, Debug)]
 pub enum Statement {
+    Function(
+        Located<String>,
+        Vec<Located<String>>,
+        Box<Located<Statement>>,
+    ),
     Print(Located<Expression>),
+    Expression(Located<Expression>),
+    Var(String, Option<Located<Expression>>),
+    Block(Vec<Located<Statement>>),
     If(
         Located<Expression>,
         Box<Located<Statement>>,
         Box<Option<Located<Statement>>>,
     ),
+    While(Located<Expression>, Box<Located<Statement>>),
     Break,
     Continue,
-    While(Located<Expression>, Box<Located<Statement>>),
-    Expression(Located<Expression>),
-    Var(String, Option<Located<Expression>>),
-    Block(Vec<Located<Statement>>),
 }
 
 impl Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Statement::Function(name, args, body) => {
+                writeln!(
+                    f,
+                    "(fun {} ({}) {})",
+                    name.item,
+                    args.iter()
+                        .map(|a| a.item.clone())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    body.item
+                )
+            }
             Statement::Print(expression) => writeln!(f, "(print {})", expression.item),
             Statement::Expression(expression) => writeln!(f, "{}", expression.item),
             Statement::Var(name, None) => {
@@ -179,7 +202,7 @@ type StatementParseResult = Result<Located<Statement>, MaybeLocated<Error>>;
 type StatementParseResultErrors = Result<Located<Statement>, Errors<MaybeLocated<Error>>>;
 
 macro_rules! consume_token {
-    ($this:ident, $tokens:expr, $token:ident) => {
+    ($this:ident, $token:ident) => {
         $this.consume(
             |t| matches!(t, $crate::lexer::Token::$token),
             |t| $crate::parser::Error::UndesiredToken($crate::lexer::Token::$token, t),
@@ -251,34 +274,14 @@ impl<I> Parser<I>
 where
     I: Iterator<Item = Located<Token>>,
 {
+    // constructor
     pub fn new(tokens: I) -> Self {
         Self {
             tokens: Peekable::new(tokens),
         }
     }
 
-    pub fn parse(&mut self) -> Result<Vec<Located<Statement>>, Errors<MaybeLocated<Error>>> {
-        let mut statements = Vec::new();
-        let mut errors = Errors::new();
-
-        loop {
-            split_ref_some_errors!(self.tokens.peek() => |token, _location| {
-                match token {
-                    Token::Eof => break,
-                    _ => match self.declaration() {
-                        Ok(statement) => statements.push(statement),
-                        Err(err) => {
-                            errors.push(err);
-                            self.synchronize();
-                        }
-                    }
-                }
-            });
-        }
-
-        errors.empty_ok(statements)
-    }
-
+    // utility fns
     fn synchronize(&mut self) {
         while let Some(_) = self.tokens.next_if(|token| {
             !matches!(
@@ -324,10 +327,34 @@ where
         )
     }
 
+    // parsing fns
+    pub fn parse(&mut self) -> Result<Vec<Located<Statement>>, Errors<MaybeLocated<Error>>> {
+        let mut statements = Vec::new();
+        let mut errors = Errors::new();
+
+        loop {
+            split_ref_some_errors!(self.tokens.peek() => |token, _location| {
+                match token {
+                    Token::Eof => break,
+                    _ => match self.declaration() {
+                        Ok(statement) => statements.push(statement),
+                        Err(err) => {
+                            errors.push(err);
+                            self.synchronize();
+                        }
+                    }
+                }
+            });
+        }
+
+        errors.empty_ok(statements)
+    }
+
     fn declaration(&mut self) -> StatementParseResult {
         split_ref_some!(self.tokens.peek() => |token, location| {
             match token {
                 Token::Var => self.var(location).with_err_located_at(Error::VarParse, location),
+                Token::Fun => self.function(location).with_err_located_at(Error::FunctionDeclarationParse, location),
                 _ => self.statement(),
             }
         })
@@ -354,6 +381,49 @@ where
                 other => Err(Error::UnexpectedToken(other).located_at(&location)),
             }
         })
+    }
+
+    fn function(&mut self, location: &impl Locateable) -> StatementParseResult {
+        self.tokens.next();
+        let Some(Located {
+            item: Token::Identifier(name),
+            ..
+        }) = self.tokens.next()
+        else {
+            return Err(Error::MissingFunctionName.located_at(location));
+        };
+        consume_token!(self, LeftParen)?;
+        let mut parameters = Vec::new();
+        if self
+            .tokens
+            .next_if(|t| matches!(t.item, Token::RightParen))
+            .is_none()
+        {
+            loop {
+                let parameter = split_some!(self.tokens.next() => |token, location| {
+                    match token {
+                        Token::Identifier(parameter) => parameter.at(&location),
+                        _ => return Err(Error::UnexpectedFunctionParameter(token).located_at(&location))
+                    }
+                });
+                parameters.push(parameter);
+                split_some!(self.tokens.next() => |token, location| {
+                    match token {
+                        Token::Comma => {
+                            if parameters.len() >= 255 {
+                                return Err(Error::TooManyArguments.located_at(&location))
+                            }
+                        },
+                        Token::RightParen => break,
+                        other => {
+                            return Err(Error::UnexpectedArgumentToken(other).located_at(&location))
+                        }
+                    }
+                });
+            }
+        }
+        let body = self.statement()?;
+        Ok(Statement::Function(name.at(location), parameters, body.into()).at(location))
     }
 
     fn statement(&mut self) -> StatementParseResult {
@@ -407,7 +477,7 @@ where
 
     fn for_statement(&mut self, location: &impl Locateable) -> StatementParseResult {
         self.tokens.next();
-        consume_token!(self, tokens, LeftParen)?;
+        consume_token!(self, LeftParen)?;
 
         // parse individual pieces
         let initializer = split_ref_some!(self.tokens.next() => |token, location| {
@@ -437,7 +507,7 @@ where
             .is_none()
         {
             let increment = Some(self.expression()?);
-            consume_token!(self, tokens, RightParen)?;
+            consume_token!(self, RightParen)?;
             increment
         } else {
             None
@@ -564,7 +634,7 @@ where
 
     fn ternary_body(&mut self, expression: Located<Expression>) -> ExpressionParseResult {
         let true_expr = self.binary()?;
-        consume_token!(self, tokens, Colon)?;
+        consume_token!(self, Colon)?;
         let false_expr = self.binary()?;
         let location = expression.location();
         Ok(

@@ -18,6 +18,7 @@ use thiserror::Error as ThisError;
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
+    // dont forget to update stack_contains when adding new scoped errors
     #[error("In this assignment:\n{0}")]
     AssignmentEvaluation(Box<Located<Error>>),
     #[error("At this unary operator:\n{0}")]
@@ -164,14 +165,14 @@ impl TryFrom<Value> for Callable {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
+    Function(Function),
+    Class(Class),
     String(String),
     Number(f64),
     True,
     False,
     Nil,
     Uninitialized,
-    Function(Function),
-    Class(Class),
 }
 
 impl From<bool> for Value {
