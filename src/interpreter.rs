@@ -2,6 +2,7 @@ use std::{
     borrow::{Borrow, Cow},
     collections::{hash_map::Entry, HashMap},
     fmt::Display,
+    time::SystemTime,
 };
 
 use polonius_the_crab::{exit_polonius, polonius, polonius_return, polonius_try};
@@ -45,6 +46,8 @@ pub enum Error {
 
     #[error("Can only call functions and class constructors, not '{0}'")]
     InvalidCallable(Value),
+    #[error("This function takes {0} arguments, but you passed {1}")]
+    IncorrectArity(usize, usize),
     #[error("This is supposed to be true or false, but it was '{0}'")]
     InvalidIfCondition(Value),
     #[error("You haven't defined '{0}' yet")]
@@ -69,7 +72,32 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Function;
+pub enum FunctionImplementation {
+    User,
+    Clock,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Function {
+    arity: usize,
+    implementation: FunctionImplementation,
+}
+
+impl Function {
+    pub fn call(&mut self, args: Vec<Value>) -> Result<Value, Located<Error>> {
+        match self.implementation {
+            FunctionImplementation::User => todo!(),
+            FunctionImplementation::Clock => {
+                return Ok(Value::Number(
+                    SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .expect("Unix epoch is always in the past")
+                        .as_secs_f64(),
+                ))
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Class;
@@ -82,7 +110,17 @@ pub enum Callable {
 
 impl Callable {
     pub fn call(&mut self, args: Vec<Value>) -> Result<Value, Located<Error>> {
-        todo!()
+        match self {
+            Callable::Function(function) => function.call(args),
+            Callable::Class(class) => todo!(),
+        }
+    }
+
+    pub fn arity(&self) -> usize {
+        match self {
+            Callable::Function(function) => function.arity,
+            Callable::Class(class) => todo!(),
+        }
     }
 }
 
@@ -222,9 +260,16 @@ pub struct Interpreter {
 
 impl Interpreter {
     pub fn new() -> Self {
-        Self {
+        let mut this = Self {
             environment: Environment::new(),
-        }
+        };
+        this.environment
+            .entry("clock".into())
+            .or_insert(Value::Function(Function {
+                arity: 0,
+                implementation: FunctionImplementation::Clock,
+            })); // insert clock native function into global scope
+        this
     }
 
     pub fn interpret(
@@ -427,14 +472,25 @@ impl Interpreter {
         arguments: &[Located<Expression>],
     ) -> Result<Value, Located<Error>> {
         let location = function.location();
-        let function = self.evaluate(function)?.into_owned(); // must evaluate function before calling it
+        let function = self.evaluate(function)?.into_owned(); // must own function before calling it
+
+        // check if callable
         let mut function: Callable = function
             .try_into()
             .with_err_at(Error::InvalidCallable, &location)?;
+
+        // check arity
+        if arguments.len() != function.arity() {
+            return Err(Error::IncorrectArity(function.arity(), arguments.len()).at(&location));
+        }
+
+        // collect arguments
         let mut argument_values = Vec::new();
         for arg in arguments {
             argument_values.push(self.evaluate(arg)?.into_owned()); // must own all function arguments before calling function
         }
+
+        // call function
         function.call(argument_values)
     }
 
