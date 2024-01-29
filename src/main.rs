@@ -10,7 +10,7 @@ use lexer::Tokens;
 use thiserror::Error as ThisError;
 
 use clap::Parser;
-use util::{ErrorInto, Errors, Located, MaybeLocated, Peekable};
+use util::{ErrorInto, Errors, Located, MaybeLocated};
 
 use crate::{interpreter::Interpreter, util::ErrorsInto};
 
@@ -67,7 +67,8 @@ fn run_with(source: String, interpreter: &mut Interpreter) -> Result<(), Errors<
             None => return None,
         }
     });
-    let Some(statements) = parser::parse(tokens).errors_into(&mut errors) else {
+    let mut parser = parser::Parser::new(tokens);
+    let Some(statements) = parser.parse().errors_into(&mut errors) else {
         return Err(errors);
     };
     let Some(()) = interpreter.interpret(&statements).error_into(&mut errors) else {
@@ -86,8 +87,8 @@ fn eval_with(source: String, interpreter: &mut Interpreter) -> Result<Value, Err
             None => return None,
         }
     });
-    let mut tokens = Peekable::new(tokens);
-    let Some(expression) = parser::expression(&mut tokens).error_into(&mut errors) else {
+    let mut parser = parser::Parser::new(tokens);
+    let Some(expression) = parser.expression().error_into(&mut errors) else {
         return Err(errors);
     };
     let Some(value) = interpreter.evaluate(&expression).error_into(&mut errors) else {
