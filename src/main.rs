@@ -77,7 +77,7 @@ fn run_with(source: String, interpreter: &mut Interpreter) -> Result<(), Errors<
     errors.empty_ok(())
 }
 
-fn eval_with(source: String, interpreter: &mut Interpreter) -> Result<Value, Errors<Error>> {
+fn eval_with<'a>(source: String, interpreter: &'a mut Interpreter) -> Result<Value<'a>, Errors<Error>> {
     let mut errors = Errors::new();
     let mut raw_tokens = Tokens::from(&*source);
     let tokens = iter::from_fn(|| loop {

@@ -50,23 +50,23 @@ pub enum Error {
     FunctionCall(Box<Located<Error>>), // eventually i hope to include the called function name in here
 
     #[error("Can only call functions and class constructors, not '{0}'")]
-    InvalidCallable(Value),
+    InvalidCallable(OwnedValue),
     #[error("This function takes {0} arguments, but you passed {1}")]
     IncorrectArity(usize, usize),
     #[error("This is supposed to be true or false, but it was '{0}'")]
-    InvalidIfCondition(Value),
+    InvalidIfCondition(OwnedValue),
     #[error("You haven't defined '{0}' yet")]
     UndeclaredVariable(String),
     #[error("'{0}' isn't initialized")]
     UninitializedVariable(String),
     #[error("I can't '{0}' a '{1}'")]
-    InvalidUnary(Token, Value),
+    InvalidUnary(Token, OwnedValue),
     #[error("I can't '{1}' a '{0}' and a '{2}'")]
-    InvalidBinary(Value, Token, Value),
+    InvalidBinary(OwnedValue, Token, OwnedValue),
     #[error("Divided '{0}' by zero!")]
-    DivisionByZero(Value),
+    DivisionByZero(OwnedValue),
     #[error("This is supposed to be true or false, but it was '{0}'")]
-    InvalidTernary(Value),
+    InvalidTernary(OwnedValue),
     #[error("This is supposed to be a value, but it was a '{0}'")]
     InvalidLiteral(Token),
 
@@ -79,20 +79,20 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug)]
-pub enum Signal {
+pub enum Signal<'a> {
     Break,
     Continue,
-    Return(Option<Value>),
+    Return(Option<Value<'a>>),
 }
 
 #[derive(Clone, Debug)]
-pub enum MaybeWithSignal<T> {
+pub enum MaybeWithSignal<'a, T> {
     NoSignal(T),
-    WithSignal(T, Signal),
+    WithSignal(T, Signal<'a>),
 }
 
-impl<T> MaybeWithSignal<T> {
-    pub fn map<V>(self, f: impl FnOnce(T) -> V) -> MaybeWithSignal<V> {
+impl<'a, T> MaybeWithSignal<'a, T> {
+    pub fn map<V>(self, f: impl FnOnce(T) -> V) -> MaybeWithSignal<'a, V> {
         match self {
             MaybeWithSignal::NoSignal(inner) => MaybeWithSignal::NoSignal(f(inner)),
             MaybeWithSignal::WithSignal(inner, signal) => {
@@ -108,18 +108,18 @@ impl<T> MaybeWithSignal<T> {
 }
 
 #[derive(Clone, Debug)]
-pub enum FunctionImplementation {
-    Lox(Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
+pub enum FunctionImplementation<'a> {
+    Lox(&'a Vec<Located<String>>, &'a Located<Statement>),
     Clock,
 }
 
 #[derive(Clone, Debug)]
-pub struct Function {
+pub struct Function<'a> {
     arity: usize,
-    implementation: FunctionImplementation,
+    implementation: FunctionImplementation<'a>,
 }
 
-impl Function {
+impl Function<'_> {
     pub fn call(
         &mut self,
         interpreter: &mut Interpreter,
@@ -163,7 +163,7 @@ impl Function {
     }
 }
 
-impl Display for FunctionImplementation {
+impl Display for FunctionImplementation<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match match self {
             Self::Lox(_, body) => Ok(format!("fn @ {}", body.location())),
@@ -179,12 +179,12 @@ impl Display for FunctionImplementation {
 pub struct Class;
 
 #[derive(Clone, Debug)]
-pub enum Callable {
-    Function(Function),
+pub enum Callable<'a> {
+    Function(Function<'a>),
     Class(Class),
 }
 
-impl Callable {
+impl Callable<'_> {
     pub fn call(
         &mut self,
         interpreter: &mut Interpreter,
@@ -204,10 +204,10 @@ impl Callable {
     }
 }
 
-impl TryFrom<Value> for Callable {
-    type Error = Value;
+impl<'a> TryFrom<Value<'a>> for Callable<'a> {
+    type Error = Value<'a>;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Value<'a>) -> Result<Self, Self::Error> {
         match value {
             Value::Function(function) => Ok(Callable::Function(function)),
             Value::Class(class) => Ok(Callable::Class(class)),
@@ -217,8 +217,8 @@ impl TryFrom<Value> for Callable {
 }
 
 #[derive(Clone, Debug)]
-pub enum Value {
-    Function(Function),
+pub enum Value<'a> {
+    Function(Function<'a>),
     Class(Class),
     String(String),
     Number(f64),
@@ -228,7 +228,7 @@ pub enum Value {
     Uninitialized,
 }
 
-impl PartialEq for Value {
+impl PartialEq for Value<'_> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Function(_), Self::Function(_)) => false,
@@ -240,7 +240,7 @@ impl PartialEq for Value {
     }
 }
 
-impl From<bool> for Value {
+impl From<bool> for Value<'_> {
     fn from(value: bool) -> Self {
         if value {
             Self::True
@@ -250,7 +250,7 @@ impl From<bool> for Value {
     }
 }
 
-impl Into<bool> for &Value {
+impl Into<bool> for &Value<'_> {
     fn into(self) -> bool {
         match self {
             Value::False | Value::Nil => false,
@@ -259,7 +259,7 @@ impl Into<bool> for &Value {
     }
 }
 
-impl Display for Value {
+impl Display for Value<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Function(fun) => write!(f, "<{}>", fun.implementation),
@@ -274,7 +274,7 @@ impl Display for Value {
     }
 }
 
-impl TryFrom<Token> for Value {
+impl TryFrom<Token> for Value<'_> {
     type Error = Token;
 
     fn try_from(value: Token) -> Result<Self, Self::Error> {
@@ -289,18 +289,60 @@ impl TryFrom<Token> for Value {
     }
 }
 
-#[derive(Debug)]
-pub enum Environment {
-    Global(HashMap<String, Value>),
-    Scope(HashMap<String, Value>, Box<Environment>),
+#[derive(Clone, Debug)]
+pub enum OwnedValue {
+    Function(String),
+    Class(Class),
+    String(String),
+    Number(f64),
+    True,
+    False,
+    Nil,
+    Uninitialized,
 }
 
-impl Environment {
+impl From<Value<'_>> for OwnedValue {
+    fn from(value: Value<'_>) -> Self {
+        match value {
+            Value::Function(f) => OwnedValue::Function(format!("{}", f.implementation)),
+            Value::Class(c) => OwnedValue::Class(c),
+            Value::String(s) => OwnedValue::String(s),
+            Value::Number(n) => OwnedValue::Number(n),
+            Value::True => OwnedValue::True,
+            Value::False => OwnedValue::False,
+            Value::Nil => OwnedValue::Nil,
+            Value::Uninitialized => OwnedValue::Uninitialized,
+        }
+    }
+}
+
+impl Display for OwnedValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OwnedValue::Function(fun) => write!(f, "<{}>", fun),
+            OwnedValue::Class(_c) => todo!("implement classes first"),
+            OwnedValue::String(s) => write!(f, "\"{s}\""),
+            OwnedValue::Number(n) => write!(f, "{n}"),
+            OwnedValue::True => write!(f, "true"),
+            OwnedValue::False => write!(f, "false"),
+            OwnedValue::Nil => write!(f, "nil"),
+            OwnedValue::Uninitialized => write!(f, "uninitialized"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Environment<'a> {
+    Global(HashMap<String, Value<'a>>),
+    Scope(HashMap<String, Value<'a>>, Box<Environment<'a>>),
+}
+
+impl<'a> Environment<'a> {
     pub fn new() -> Self {
         Self::Global(HashMap::new())
     }
 
-    pub fn entry<'a>(&'a mut self, key: String) -> Entry<'a, String, Value> {
+    pub fn entry<'b: 'a>(&'b mut self, key: String) -> Entry<'b, String, Value<'a>> {
         let (mut env, outer_scope) = match self {
             Environment::Global(env) => return env.entry(key),
             Environment::Scope(env, outer_scope) => (env, outer_scope),
@@ -318,7 +360,7 @@ impl Environment {
         return env.entry(key);
     }
 
-    pub fn top_entry(&mut self, key: String) -> Entry<'_, String, Value> {
+    pub fn top_entry(&mut self, key: String) -> Entry<'_, String, Value<'a>> {
         let (Environment::Global(env) | Environment::Scope(env, _)) = self;
         env.entry(key)
     }
@@ -346,18 +388,18 @@ impl Environment {
 #[error("Already at global scope")]
 pub struct AtGlobalScopeError;
 
-type EvalError = MaybeWithSignal<Located<Error>>;
-type StatementEvalResult = Result<(), EvalError>;
-type ExpressionEvalResult = Result<Value, EvalError>;
-type ExpressionEvalResultCow<'a> = Result<Cow<'a, Value>, EvalError>;
+type EvalError<'a> = MaybeWithSignal<'a, Located<Error>>;
+type StatementEvalResult<'a> = Result<(), EvalError<'a>>;
+type ExpressionEvalResult<'a> = Result<Value<'a>, EvalError<'a>>;
+type ExpressionEvalResultCow<'a, 'b> = Result<Cow<'a, Value<'b>>, EvalError<'a>>;
 
-pub struct Interpreter {
-    environment: Environment,
+pub struct Interpreter<'a> {
+    environment: Environment<'a>,
 }
 
-impl Interpreter {
-    pub fn new() -> Self {
-        let mut this = Self {
+impl<'i> Interpreter<'i> {
+    pub fn new() -> Interpreter<'i> {
+        let mut this = Interpreter {
             environment: Environment::new(),
         };
         this.environment
@@ -448,7 +490,7 @@ impl Interpreter {
                 .entry(name.item.clone())
                 .insert(Value::Function(Function {
                     arity: parameters.len(),
-                    implementation: FunctionImplementation::Lox(parameters.clone(), body.clone()), // rc clones, cheap
+                    implementation: FunctionImplementation::Lox(parameters, body.as_ref()),
                 })),
         }
         Ok(())
@@ -498,7 +540,10 @@ impl Interpreter {
         Ok(())
     }
 
-    pub fn evaluate(&mut self, expression: &Located<Expression>) -> ExpressionEvalResultCow<'_> {
+    pub fn evaluate(
+        &mut self,
+        expression: &Located<Expression>,
+    ) -> ExpressionEvalResultCow<'_, '_> {
         let location = &expression.location();
         match &expression.item {
             Expression::Literal(literal_token) => self
@@ -549,7 +594,7 @@ impl Interpreter {
         &'a mut self,
         name: Located<String>,
         expression: &Located<Expression>,
-    ) -> ExpressionEvalResultCow<'a> {
+    ) -> ExpressionEvalResultCow<'a, '_> {
         let (name, location) = name.split();
         let value = self.evaluate(expression)?.into_owned(); // own must occur in order to store the value
         match self.environment.entry(name) {
@@ -576,9 +621,11 @@ impl Interpreter {
                 let bool_value: bool = operand.into();
                 Ok((!bool_value).into())
             }
-            (unary, _) => Err(Error::InvalidUnary(unary.clone(), value.into_owned())
-                .at(&location)
-                .no_signal()), // error contents must be owned
+            (unary, _) => Err(
+                Error::InvalidUnary(unary.clone(), value.into_owned().into())
+                    .at(&location)
+                    .no_signal(),
+            ), // error contents must be owned
         }
     }
 
@@ -618,24 +665,25 @@ impl Interpreter {
         binary: &Located<Token>,
         lhs_expr: &Located<Expression>,
         rhs_expr: &Located<Expression>,
-    ) -> ExpressionEvalResultCow<'_> {
+    ) -> ExpressionEvalResultCow<'_, '_> {
         let binary_location = binary.location();
         let lhs_location = lhs_expr.location();
 
         let mut this = self; // cannot use polonius_the_crab on `self`
 
-        let (lhs_truthiness, lhs_value) = polonius!(|this| -> ExpressionEvalResultCow<'polonius> {
-            let lhs_value = polonius_try!(this.evaluate(lhs_expr));
+        let (lhs_truthiness, lhs_value) =
+            polonius!(|this| -> ExpressionEvalResultCow<'polonius, '_> {
+                let lhs_value = polonius_try!(this.evaluate(lhs_expr));
 
-            // match short circuit boolean operations before evaluating right hand side
-            let lhs_borrow: &Value = lhs_value.borrow();
-            match (lhs_borrow.into(), &binary.item) {
-                (false, Token::And) | (true, Token::Or) => {
-                    polonius_return!(Ok(lhs_value));
-                }
-                (lhs_truthiness, _) => exit_polonius!((lhs_truthiness, lhs_value.into_owned())), // this own may not be cheap, but it is unavoidable, because we must also borrow rhs 😔
-            };
-        });
+                // match short circuit boolean operations before evaluating right hand side
+                let lhs_borrow: &Value = lhs_value.borrow();
+                match (lhs_borrow.into(), &binary.item) {
+                    (false, Token::And) | (true, Token::Or) => {
+                        polonius_return!(Ok(lhs_value));
+                    }
+                    (lhs_truthiness, _) => exit_polonius!((lhs_truthiness, lhs_value.into_owned())), // this own may not be cheap, but it is unavoidable, because we must also borrow rhs 😔
+                };
+            });
 
         let rhs_value = this.evaluate(rhs_expr)?;
 
@@ -680,7 +728,7 @@ impl Interpreter {
 
             // arithmetic
             (_, Token::Slash, Value::Number(rhs)) if rhs.borrow() == &0.0 => {
-                Err(Error::DivisionByZero(lhs_value)
+                Err(Error::DivisionByZero(lhs_value.into())
                     .at(&lhs_location)
                     .no_signal())
             }
@@ -716,11 +764,13 @@ impl Interpreter {
 
             // invalid
             (_, operator, _) => {
-                Err(
-                    Error::InvalidBinary(lhs_value, operator.clone(), rhs_value.into_owned())
-                        .at(&binary_location)
-                        .no_signal(),
-                ) // error contents must be owned
+                Err(Error::InvalidBinary(
+                    lhs_value.into(),
+                    operator.clone(),
+                    rhs_value.into_owned().into(),
+                )
+                .at(&binary_location)
+                .no_signal()) // error contents must be owned
             }
         }
     }
@@ -730,7 +780,7 @@ impl Interpreter {
         condition_expr: &Located<Expression>,
         true_branch_expr: &Located<Expression>,
         false_branch_expr: &Located<Expression>,
-    ) -> ExpressionEvalResultCow<'_> {
+    ) -> ExpressionEvalResultCow<'_, '_> {
         let condition_value = self.evaluate(condition_expr)?;
         let condition_bool: &Value = condition_value.borrow();
         if condition_bool.into() {

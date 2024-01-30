@@ -130,8 +130,8 @@ impl Display for Expression {
 pub enum Statement {
     Function(
         Located<String>,
-        Rc<Vec<Located<String>>>,
-        Rc<Located<Statement>>,
+        Vec<Located<String>>,
+        Box<Located<Statement>>,
     ),
     Print(Located<Expression>),
     Expression(Located<Expression>),

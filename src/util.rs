@@ -193,12 +193,13 @@ pub trait AppendLocatedErrorWithSignal<F, U, E, T> {
     ) -> Self::Output;
 }
 
-impl<V, F, U, E, T> AppendLocatedErrorWithSignal<F, U, E, T> for Result<V, MaybeWithSignal<E>>
+impl<'a, V, F, U, E, T> AppendLocatedErrorWithSignal<F, U, E, T>
+    for Result<V, MaybeWithSignal<'a, E>>
 where
     U: From<E>,
     F: FnOnce(U) -> T,
 {
-    type Output = Result<V, MaybeWithSignal<Located<T>>>;
+    type Output = Result<V, MaybeWithSignal<'a, Located<T>>>;
 
     fn with_maybe_signaled_err_at(
         self,
@@ -450,11 +451,11 @@ impl<'a, T: Clone + 'a, E> AsOwned<'a> for Result<T, E> {
 }
 
 pub trait Signaling: Sized {
-    fn signaling(self, signal: Signal) -> MaybeWithSignal<Self> {
+    fn signaling<'a>(self, signal: Signal<'a>) -> MaybeWithSignal<'a, Self> {
         MaybeWithSignal::WithSignal(self, signal)
     }
 
-    fn no_signal(self) -> MaybeWithSignal<Self> {
+    fn no_signal<'a>(self) -> MaybeWithSignal<'a, Self> {
         MaybeWithSignal::NoSignal(self)
     }
 }
@@ -462,22 +463,22 @@ pub trait Signaling: Sized {
 impl<T: Sized> Signaling for T {}
 
 pub trait SignalingResult {
-    type SignalingOutput;
-    type NotSignalingOutput;
+    type SignalingOutput<'a>;
+    type NotSignalingOutput<'a>;
 
-    fn err_signaling(self, signal: Signal) -> Self::SignalingOutput;
-    fn err_no_signal(self) -> Self::NotSignalingOutput;
+    fn err_signaling<'a>(self, signal: Signal<'a>) -> Self::SignalingOutput<'a>;
+    fn err_no_signal<'a>(self) -> Self::NotSignalingOutput<'a>;
 }
 
 impl<T, E: Sized> SignalingResult for Result<T, E> {
-    type SignalingOutput = Result<T, MaybeWithSignal<E>>;
-    type NotSignalingOutput = Result<T, MaybeWithSignal<E>>;
+    type SignalingOutput<'a> = Result<T, MaybeWithSignal<'a, E>>;
+    type NotSignalingOutput<'a> = Result<T, MaybeWithSignal<'a, E>>;
 
-    fn err_signaling(self, signal: Signal) -> Self::SignalingOutput {
+    fn err_signaling<'a>(self, signal: Signal<'a>) -> Self::SignalingOutput<'a> {
         self.map_err(|e| e.signaling(signal))
     }
 
-    fn err_no_signal(self) -> Self::NotSignalingOutput {
+    fn err_no_signal<'a>(self) -> Self::NotSignalingOutput<'a> {
         self.map_err(Signaling::no_signal)
     }
 }
