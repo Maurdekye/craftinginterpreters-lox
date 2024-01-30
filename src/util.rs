@@ -84,6 +84,12 @@ impl<L: Locateable> From<&L> for Location {
     }
 }
 
+impl Display for Location {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}:{}]", self.line, self.character)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Located<T> {
     pub line: usize,

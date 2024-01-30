@@ -131,12 +131,9 @@ impl Function {
                 interpreter.environment.push();
 
                 // register parameters as variables in the function body
-                for (name, value) in parameters.iter().zip(args) {
-                    interpreter
-                        .environment
-                        .top_entry(name.item.clone())
-                        .insert(value);
-                }
+                let (Environment::Global(map) | Environment::Scope(map, _)) =
+                    &mut interpreter.environment;
+                map.extend(parameters.iter().map(|s| s.item.clone()).zip(args));
 
                 // eval function and expect a return value
                 let return_val = match interpreter.statement(body) {
@@ -162,6 +159,18 @@ impl Function {
                     .expect("Unix epoch is always in the past")
                     .as_secs_f64(),
             )),
+        }
+    }
+}
+
+impl Display for FunctionImplementation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match match self {
+            Self::Lox(_, body) => Ok(format!("fn @ {}", body.location())),
+            Self::Clock => Err("clock"),
+        } {
+            Ok(s) => write!(f, "{s}"),
+            Err(s) => write!(f, "native fn {s}"),
         }
     }
 }
@@ -253,7 +262,7 @@ impl Into<bool> for &Value {
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Function(_f) => todo!("implement functions first"),
+            Value::Function(fun) => write!(f, "<{}>", fun.implementation),
             Value::Class(_c) => todo!("implement classes first"),
             Value::String(s) => write!(f, "\"{s}\""),
             Value::Number(n) => write!(f, "{n}"),

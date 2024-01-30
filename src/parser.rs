@@ -306,19 +306,16 @@ where
         &mut self,
         pred: impl FnOnce(&Token) -> bool,
         error_factory: impl FnOnce(Token) -> Error,
-    ) -> Result<Location, MaybeLocated<Error>> {
-        match self.tokens.peek() {
-            Some(located_token @ Located { item: token, .. }) => {
-                let location = located_token.location();
-                if pred(&token) {
-                    self.tokens.next();
-                    Ok(location)
-                } else {
-                    Err(error_factory(token.clone()).located_at(&location))
+    ) -> Result<Located<Token>, MaybeLocated<Error>> {
+        self.tokens
+            .next_if(|t| pred(&t.item))
+            .ok_or_else(|| match self.tokens.peek() {
+                Some(token) => {
+                    let location = token.location();
+                    error_factory(token.item.clone()).located_at(&location)
                 }
-            }
-            None => Err(error_factory(Token::Eof).unlocated()),
-        }
+                None => error_factory(Token::Eof).unlocated(),
+            })
     }
 
     fn consume_semicolon(&mut self) -> Result<Location, MaybeLocated<Error>> {
@@ -326,6 +323,7 @@ where
             |t| matches!(t, Token::Semicolon),
             |_| Error::MissingSemicolon,
         )
+        .map(|x| x.location())
     }
 
     // parsing fns
@@ -492,7 +490,7 @@ where
         consume_token!(self, LeftParen)?;
 
         // parse individual pieces
-        let initializer = split_ref_some!(self.tokens.next() => |token, location| {
+        let initializer = split_ref_some!(self.tokens.peek() => |token, location| {
             match token {
                 Token::Semicolon => {
                     self.tokens.next();
