@@ -131,9 +131,8 @@ impl Function {
         match &self.implementation {
             FunctionImplementation::Lox(parameters, body) => {
                 // substitute interpreter's scope with function's scope during execution
-                let prior_scope = std::mem::replace(&mut interpreter.scope_handle, unsafe {
-                    self.scope.unsafe_clone() // definitely don't like this :(
-                });
+                let function_scope = interpreter.environment.dupe(&self.scope).unwrap();
+                let prior_scope = std::mem::replace(&mut interpreter.scope_handle, function_scope);
 
                 // new scope for function body
                 replace_with_or_abort(&mut interpreter.scope_handle, |handle| {
@@ -166,7 +165,8 @@ impl Function {
                 });
 
                 // return interpreter's scope back to prior state
-                interpreter.scope_handle = prior_scope;
+                let function_scope = std::mem::replace(&mut interpreter.scope_handle, prior_scope);
+                interpreter.environment.drop(function_scope);
 
                 // return result
                 return_val
@@ -378,12 +378,6 @@ mod environment {
 
     #[derive(Debug)]
     pub struct ScopeHandle(usize);
-
-    impl ScopeHandle {
-        pub unsafe fn unsafe_clone(&self) -> ScopeHandle {
-            ScopeHandle(self.0)
-        }
-    }
 
     #[derive(Debug)]
     pub struct Scope {
