@@ -360,178 +360,243 @@ impl TryFrom<Token> for Value {
 //     }
 // }
 
-mod environment {
-    use std::collections::{hash_map::Entry, HashMap};
+// #[derive(Clone, Debug, ThisError)]
+// #[error("Already at global scope")]
+// pub struct AtGlobalScopeError;
 
-    use polonius_the_crab::{exit_polonius, polonius, polonius_return};
+// mod environment {
+//     use std::collections::{hash_map::Entry, HashMap};
+
+//     use polonius_the_crab::{exit_polonius, polonius, polonius_return};
+//     use thiserror::Error as ThisError;
+
+//     use super::Value;
+
+//     #[derive(Debug, ThisError)]
+//     pub enum Error {
+//         #[error("Scope handle not associated with a scope")]
+//         NoScope,
+//         #[error("Scope associated with handle does not have a parent")]
+//         NoParentScope,
+//     }
+
+//     #[derive(Debug)]
+//     pub struct ScopeHandle(usize);
+
+//     #[derive(Debug)]
+//     pub struct Scope {
+//         references: usize,
+//         env: HashMap<String, Value>,
+//         parent: Option<ScopeHandle>,
+//     }
+
+//     #[derive(Debug)]
+//     pub struct Environment {
+//         scopes: Vec<Option<Scope>>,
+//     }
+
+//     impl Environment {
+//         pub fn new() -> (Environment, ScopeHandle) {
+//             let this = Environment {
+//                 scopes: vec![Some(Scope {
+//                     references: 1,
+//                     env: HashMap::new(),
+//                     parent: None,
+//                 })],
+//             };
+//             (this, ScopeHandle(0))
+//         }
+
+//         fn next_vacant_handle(&mut self) -> ScopeHandle {
+//             if let Some(id) = self.scopes.iter().position(|x| x.is_none()) {
+//                 ScopeHandle(id)
+//             } else {
+//                 self.scopes.push(None);
+//                 ScopeHandle(self.scopes.len() - 1)
+//             }
+//         }
+
+//         fn place_scope(&mut self, scope: Scope) -> ScopeHandle {
+//             let handle = self.next_vacant_handle();
+//             self.scopes[handle.0] = Some(scope);
+//             handle
+//         }
+
+//         fn retrieve_scope(&mut self, handle: &ScopeHandle) -> Option<&mut Scope> {
+//             self.scopes.get_mut(handle.0).map(Option::as_mut).flatten()
+//         }
+
+//         pub fn dupe(&mut self, handle: &ScopeHandle) -> Result<ScopeHandle, Error> {
+//             let Some(scope) = self.retrieve_scope(handle) else {
+//                 return Err(Error::NoScope);
+//             };
+//             scope.references += 1;
+//             Ok(ScopeHandle(handle.0))
+//         }
+
+//         pub fn drop(&mut self, handle: ScopeHandle) {
+//             (|| -> Option<()> {
+//                 let scope = self.retrieve_scope(&handle)?;
+//                 scope.references -= 1;
+//                 if scope.references == 0 {
+//                     let inner_scope = std::mem::take(self.scopes.get_mut(handle.0)?)?;
+//                     if handle.0 == self.scopes.len() - 1 {
+//                         self.scopes.pop();
+//                     }
+//                     let parent = inner_scope.parent?;
+//                     self.drop(parent);
+//                 }
+//                 Some(())
+//             })();
+//         }
+
+//         pub fn push(&mut self, handle: ScopeHandle) -> ScopeHandle {
+//             let new_scope = Scope {
+//                 references: 1,
+//                 env: HashMap::new(),
+//                 parent: Some(handle),
+//             };
+//             self.place_scope(new_scope)
+//         }
+
+//         pub fn pop(&mut self, handle: ScopeHandle) -> Result<ScopeHandle, (ScopeHandle, Error)> {
+//             let Some(scope) = self.retrieve_scope(&handle) else {
+//                 return Err((handle, Error::NoScope));
+//             };
+//             let Some(parent_handle) = std::mem::take(&mut scope.parent) else {
+//                 return Err((handle, Error::NoParentScope));
+//             };
+//             self.drop(handle);
+//             Ok(parent_handle)
+//         }
+
+//         pub fn entry_checked<'a>(
+//             &'a mut self,
+//             handle: &ScopeHandle,
+//             key: String,
+//         ) -> Result<Entry<'a, String, Value>, String> {
+//             let mut this = self;
+//             let (key, parent_handle) =
+//                 polonius!(|this| -> Result<Entry<'polonius, String, Value>, String> {
+//                     let Some(scope) = this.retrieve_scope(&handle) else {
+//                         polonius_return!(Err(key));
+//                     };
+//                     let parent_handle = match &scope.parent {
+//                         None => polonius_return!(Ok(scope.env.entry(key))),
+//                         Some(parent_handle) => ScopeHandle(parent_handle.0),
+//                     };
+//                     match scope.env.entry(key) {
+//                         entry @ Entry::Occupied(_) => polonius_return!(Ok(entry)),
+//                         Entry::Vacant(vacant) => exit_polonius!((vacant.into_key(), parent_handle)),
+//                     }
+//                 });
+//             let key = polonius!(|this| -> Result<Entry<'polonius, String, Value>, String> {
+//                 match this.entry_checked(&parent_handle, key) {
+//                     Ok(entry @ Entry::Occupied(_)) => polonius_return!(Ok(entry)),
+//                     Ok(Entry::Vacant(vacant)) => exit_polonius!(vacant.into_key()),
+//                     Err(key) => exit_polonius!(key),
+//                 }
+//             });
+//             // this is redundant... but polonius is too annoying to work around to try and remove this
+//             let Some(scope) = this.retrieve_scope(&handle) else {
+//                 return Err(key);
+//             };
+//             Ok(scope.env.entry(key))
+//         }
+
+//         pub fn entry<'a>(
+//             &'a mut self,
+//             handle: &ScopeHandle,
+//             key: String,
+//         ) -> Entry<'a, String, Value> {
+//             self.entry_checked(handle, key).unwrap()
+//         }
+
+//         pub fn top_entry_checked<'a>(
+//             &'a mut self,
+//             handle: &ScopeHandle,
+//             key: String,
+//         ) -> Result<Entry<'a, String, Value>, String> {
+//             let Some(scope) = self.retrieve_scope(&handle) else {
+//                 return Err(key);
+//             };
+//             Ok(scope.env.entry(key))
+//         }
+
+//         pub fn top_entry<'a>(
+//             &'a mut self,
+//             handle: &ScopeHandle,
+//             key: String,
+//         ) -> Entry<'a, String, Value> {
+//             self.top_entry_checked(handle, key).unwrap()
+//         }
+//     }
+// }
+
+mod environment {
+    use std::{borrow::Cow, cell::RefCell, collections::{hash_map::Entry, HashMap}, rc::Rc};
+
+    use replace_with::replace_with_or_abort;
     use thiserror::Error as ThisError;
 
     use super::Value;
 
-    #[derive(Debug, ThisError)]
-    pub enum Error {
-        #[error("Scope handle not associated with a scope")]
-        NoScope,
-        #[error("Scope associated with handle does not have a parent")]
-        NoParentScope,
-    }
-
-    #[derive(Debug)]
-    pub struct ScopeHandle(usize);
-
-    #[derive(Debug)]
     pub struct Scope {
-        references: usize,
         env: HashMap<String, Value>,
-        parent: Option<ScopeHandle>,
+        parent: Option<Rc<RefCell<Scope>>>,
     }
 
-    #[derive(Debug)]
-    pub struct Environment {
-        scopes: Vec<Option<Scope>>,
-    }
-
-    impl Environment {
-        pub fn new() -> (Environment, ScopeHandle) {
-            let this = Environment {
-                scopes: vec![Some(Scope {
-                    references: 1,
-                    env: HashMap::new(),
-                    parent: None,
-                })],
-            };
-            (this, ScopeHandle(0))
-        }
-
-        fn next_vacant_handle(&mut self) -> ScopeHandle {
-            if let Some(id) = self.scopes.iter().position(|x| x.is_none()) {
-                ScopeHandle(id)
-            } else {
-                self.scopes.push(None);
-                ScopeHandle(self.scopes.len() - 1)
+    impl Scope {
+        fn new() -> Self {
+            Self {
+                env: HashMap::new(),
+                parent: None,
             }
         }
+    }
 
-        fn place_scope(&mut self, scope: Scope) -> ScopeHandle {
-            let handle = self.next_vacant_handle();
-            self.scopes[handle.0] = Some(scope);
-            handle
+    #[derive(Clone, Debug)]
+    pub struct Environment(Rc<RefCell<Scope>>);
+
+    impl Environment {
+        pub fn new() -> Self {
+            Environment(Rc::new(RefCell::new(Scope::new())))
         }
 
-        fn retrieve_scope(&mut self, handle: &ScopeHandle) -> Option<&mut Scope> {
-            self.scopes.get_mut(handle.0).map(Option::as_mut).flatten()
+        pub fn push(&mut self) {
+            replace_with_or_abort(&mut self.0, |scope| {
+                let new_scope = Scope {
+                    env: HashMap::new(),
+                    parent: Some(scope),
+                };
+                Rc::new(RefCell::new(new_scope))
+            })
         }
 
-        pub fn dupe(&mut self, handle: &ScopeHandle) -> Result<ScopeHandle, Error> {
-            let Some(scope) = self.retrieve_scope(handle) else {
-                return Err(Error::NoScope);
+        pub fn pop(&mut self) -> Result<(), AtGlobalScopeError> {
+            let Some(parent) = std::mem::take(&mut self.0.parent) else {
+                return Err(AtGlobalScopeError);
             };
-            scope.references += 1;
-            Ok(ScopeHandle(handle.0))
+            replace_with_or_abort(&mut self.0, |_| parent);
+            Ok(())
         }
 
-        pub fn drop(&mut self, handle: ScopeHandle) {
-            (|| -> Option<()> {
-                let scope = self.retrieve_scope(&handle)?;
-                scope.references -= 1;
-                if scope.references == 0 {
-                    let inner_scope = std::mem::take(self.scopes.get_mut(handle.0)?)?;
-                    if handle.0 == self.scopes.len() - 1 {
-                        self.scopes.pop();
-                    }
-                    let parent = inner_scope.parent?;
-                    self.drop(parent);
-                }
-                Some(())
-            })();
-        }
-
-        pub fn push(&mut self, handle: ScopeHandle) -> ScopeHandle {
-            let new_scope = Scope {
-                references: 1,
-                env: HashMap::new(),
-                parent: Some(handle),
+        pub fn get(&mut self, key: String) -> Result<Cow<Value>, String> {
+            let scope = self.0.borrow_mut();
+            let parent_scope = match scope.parent {
+                None => return Ok()
+            }
+            let key = match scope.env.entry(key) {
+                entry @ Entry::Occupied(_) => return Ok(Cow::Borrowed(entry.into_mut())),
+                Entry::Vacant(vacant) => vacant.into_key(),
             };
-            self.place_scope(new_scope)
-        }
-
-        pub fn pop(&mut self, handle: ScopeHandle) -> Result<ScopeHandle, (ScopeHandle, Error)> {
-            let Some(scope) = self.retrieve_scope(&handle) else {
-                return Err((handle, Error::NoScope));
-            };
-            let Some(parent_handle) = std::mem::take(&mut scope.parent) else {
-                return Err((handle, Error::NoParentScope));
-            };
-            self.drop(handle);
-            Ok(parent_handle)
-        }
-
-        pub fn entry_checked<'a>(
-            &'a mut self,
-            handle: &ScopeHandle,
-            key: String,
-        ) -> Result<Entry<'a, String, Value>, String> {
-            let mut this = self;
-            let (key, parent_handle) =
-                polonius!(|this| -> Result<Entry<'polonius, String, Value>, String> {
-                    let Some(scope) = this.retrieve_scope(&handle) else {
-                        polonius_return!(Err(key));
-                    };
-                    let parent_handle = match &scope.parent {
-                        None => polonius_return!(Ok(scope.env.entry(key))),
-                        Some(parent_handle) => ScopeHandle(parent_handle.0),
-                    };
-                    match scope.env.entry(key) {
-                        entry @ Entry::Occupied(_) => polonius_return!(Ok(entry)),
-                        Entry::Vacant(vacant) => exit_polonius!((vacant.into_key(), parent_handle)),
-                    }
-                });
-            let key = polonius!(|this| -> Result<Entry<'polonius, String, Value>, String> {
-                match this.entry_checked(&parent_handle, key) {
-                    Ok(entry @ Entry::Occupied(_)) => polonius_return!(Ok(entry)),
-                    Ok(Entry::Vacant(vacant)) => exit_polonius!(vacant.into_key()),
-                    Err(key) => exit_polonius!(key),
-                }
-            });
-            // this is redundant... but polonius is too annoying to work around to try and remove this
-            let Some(scope) = this.retrieve_scope(&handle) else {
-                return Err(key);
-            };
-            Ok(scope.env.entry(key))
-        }
-
-        pub fn entry<'a>(
-            &'a mut self,
-            handle: &ScopeHandle,
-            key: String,
-        ) -> Entry<'a, String, Value> {
-            self.entry_checked(handle, key).unwrap()
-        }
-
-        pub fn top_entry_checked<'a>(
-            &'a mut self,
-            handle: &ScopeHandle,
-            key: String,
-        ) -> Result<Entry<'a, String, Value>, String> {
-            let Some(scope) = self.retrieve_scope(&handle) else {
-                return Err(key);
-            };
-            Ok(scope.env.entry(key))
-        }
-
-        pub fn top_entry<'a>(
-            &'a mut self,
-            handle: &ScopeHandle,
-            key: String,
-        ) -> Entry<'a, String, Value> {
-            self.top_entry_checked(handle, key).unwrap()
         }
     }
-}
 
-#[derive(Clone, Debug, ThisError)]
-#[error("Already at global scope")]
-pub struct AtGlobalScopeError;
+    #[derive(Clone, Debug, ThisError)]
+    #[error("Already at global scope")]
+    pub struct AtGlobalScopeError;
+}
 
 type EvalError = MaybeWithSignal<Located<Error>>;
 type StatementEvalResult = Result<(), EvalError>;
