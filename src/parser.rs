@@ -91,6 +91,7 @@ pub enum Expression {
         Box<Located<Expression>>,
     ),
     Call(Box<Located<Expression>>, Vec<Located<Expression>>),
+    Lambda(Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
 }
 
 impl Display for Expression {
@@ -120,6 +121,17 @@ impl Display for Expression {
                         .map(|a| format!("{a}"))
                         .collect::<Vec<_>>()
                         .join(" ")
+                )
+            }
+            Expression::Lambda(args, body) => {
+                write!(
+                    f,
+                    "(lambda ({}) {})",
+                    args.iter()
+                        .map(|a| a.item.clone())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                    body.item
                 )
             }
         }
@@ -382,15 +394,7 @@ where
         })
     }
 
-    fn function(&mut self, location: &impl Locateable) -> StatementParseResult {
-        self.tokens.next();
-        let Some(Located {
-            item: Token::Identifier(name),
-            ..
-        }) = self.tokens.next()
-        else {
-            return Err(Error::MissingFunctionName.located_at(location));
-        };
+    fn function_parameters(&mut self) -> Result<Vec<Located<String>>, MaybeLocated<Error>> {
         consume_token!(self, LeftParen)?;
         let mut parameters = Vec::new();
         if self
@@ -421,6 +425,19 @@ where
                 });
             }
         }
+        Ok(parameters)
+    }
+
+    fn function(&mut self, location: &impl Locateable) -> StatementParseResult {
+        self.tokens.next();
+        let Some(Located {
+            item: Token::Identifier(name),
+            ..
+        }) = self.tokens.next()
+        else {
+            return Err(Error::MissingFunctionName.located_at(location));
+        };
+        let parameters = self.function_parameters()?;
         let body = self.statement()?;
         Ok(Statement::Function(name.at(location), parameters.into(), body.into()).at(location))
     }
@@ -587,7 +604,19 @@ where
     }
 
     pub fn expression(&mut self) -> ExpressionParseResult {
-        self.assignment()
+        split_ref_some!(self.tokens.peek() => |token, location| {
+            match token {
+                Token::Fun => self.lambda(location),
+                _ => self.assignment()
+            }
+        })
+    }
+
+    fn lambda(&mut self, location: &impl Locateable) -> ExpressionParseResult {
+        self.tokens.next();
+        let parameters = self.function_parameters()?;
+        let body = self.statement()?;
+        Ok(Expression::Lambda(parameters.into(), body.into()).at(location))
     }
 
     fn assignment(&mut self) -> ExpressionParseResult {

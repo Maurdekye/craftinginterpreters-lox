@@ -642,17 +642,10 @@ impl Interpreter {
                 result?;
             }
             Statement::Function(name, parameters, body) => {
-                let new_handle = self.environment.dupe(&self.scope_handle).unwrap();
+                let function = self.function_declaration(parameters.clone(), body.clone())?;
                 self.environment
                     .entry(&self.scope_handle, name.item.clone())
-                    .insert(Value::Function(Function {
-                        arity: parameters.len(),
-                        scope: Rc::new(new_handle),
-                        implementation: FunctionImplementation::Lox(
-                            parameters.clone(),
-                            body.clone(),
-                        ), // rc clones, cheap
-                    }))
+                    .insert(function)
             }
         }
         Ok(())
@@ -732,7 +725,23 @@ impl Interpreter {
                 .call(function.as_ref(), &arguments[..])
                 .as_owned()
                 .with_maybe_signaled_err_at(Error::FunctionCall, location),
+            Expression::Lambda(parameters, body) => self
+                .function_declaration(parameters.clone(), body.clone())
+                .as_owned(),
         }
+    }
+
+    fn function_declaration(
+        &mut self,
+        parameters: Rc<Vec<Located<String>>>,
+        body: Rc<Located<Statement>>,
+    ) -> ExpressionEvalResult {
+        let new_handle = self.environment.dupe(&self.scope_handle).unwrap();
+        Ok(Value::Function(Function {
+            arity: parameters.len(),
+            scope: Rc::new(new_handle),
+            implementation: FunctionImplementation::Lox(parameters, body), // rc clones, cheap
+        }))
     }
 
     fn literal(&mut self, literal: &Located<Token>) -> Result<Value, Token> {
