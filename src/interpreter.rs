@@ -435,10 +435,11 @@ mod environment {
                 let scope = self.retrieve_scope(&handle)?;
                 scope.references -= 1;
                 if scope.references == 0 {
-                    let parent = std::mem::take(self.scopes.get_mut(handle.0)?)?.parent?;
-                    if handle.0 == self.scopes.len() {
+                    let inner_scope = std::mem::take(self.scopes.get_mut(handle.0)?)?;
+                    if handle.0 == self.scopes.len() - 1 {
                         self.scopes.pop();
                     }
+                    let parent = inner_scope.parent?;
                     self.drop(parent);
                 }
                 Some(())
