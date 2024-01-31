@@ -1,26 +1,24 @@
 use std::{
     borrow::{Borrow, Cow},
-    collections::hash_map::Entry,
     fmt::Display,
     rc::Rc,
     time::SystemTime,
 };
 
 use polonius_the_crab::{exit_polonius, polonius, polonius_return, polonius_try};
-use replace_with::replace_with_or_abort;
 
 use crate::{
     lexer::Token,
     parser::{Expression, Statement},
     util::{
-        AppendLocatedError, AppendLocatedErrorWithSignal, AsOwned, EntryInsert, Locateable,
-        Located, LocatedAt, Signaling, SignalingResult,
+        AppendLocatedError, AppendLocatedErrorWithSignal, AsOwned, Locateable, Located, LocatedAt,
+        Signaling, SignalingResult,
     },
 };
 
 use thiserror::Error as ThisError;
 
-use self::environment::{Environment, ScopeHandle};
+use self::environment::Environment;
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
@@ -118,7 +116,7 @@ pub enum FunctionImplementation {
 #[derive(Clone, Debug)]
 pub struct Function {
     arity: usize,
-    scope: Rc<ScopeHandle>, // really don't like this...
+    environment: Environment,
     implementation: FunctionImplementation,
 }
 
@@ -131,20 +129,15 @@ impl Function {
         match &self.implementation {
             FunctionImplementation::Lox(parameters, body) => {
                 // substitute interpreter's scope with function's scope during execution
-                let function_scope = interpreter.environment.dupe(&self.scope).unwrap();
-                let prior_scope = std::mem::replace(&mut interpreter.scope_handle, function_scope);
+                let prior_scope =
+                    std::mem::replace(&mut interpreter.environment, self.environment.clone());
 
                 // new scope for function body
-                replace_with_or_abort(&mut interpreter.scope_handle, |handle| {
-                    interpreter.environment.push(handle)
-                });
+                interpreter.environment.push();
 
                 // register parameters as variables in the function body
                 for (name, value) in parameters.iter().map(|s| s.item.clone()).zip(args) {
-                    interpreter
-                        .environment
-                        .top_entry(&interpreter.scope_handle, name)
-                        .insert(value);
+                    interpreter.environment.declare(name, value);
                 }
 
                 // eval function and expect a return value
@@ -157,16 +150,13 @@ impl Function {
                 };
 
                 // pop function body's scope
-                replace_with_or_abort(&mut interpreter.scope_handle, |handle| {
-                    interpreter
-                        .environment
-                        .pop(handle)
-                        .expect("Will always have just pushed a scope")
-                });
+                interpreter
+                    .environment
+                    .pop()
+                    .expect("Will always have just pushed a scope");
 
                 // return interpreter's scope back to prior state
-                let function_scope = std::mem::replace(&mut interpreter.scope_handle, prior_scope);
-                interpreter.environment.drop(function_scope);
+                let _ = std::mem::replace(&mut interpreter.environment, prior_scope);
 
                 // return result
                 return_val
@@ -534,13 +524,19 @@ impl TryFrom<Token> for Value {
 // }
 
 mod environment {
-    use std::{borrow::Cow, cell::RefCell, collections::{hash_map::Entry, HashMap}, rc::Rc};
+    use std::{
+        borrow::Cow,
+        cell::RefCell,
+        collections::{hash_map::Entry, HashMap},
+        rc::Rc,
+    };
 
     use replace_with::replace_with_or_abort;
     use thiserror::Error as ThisError;
 
     use super::Value;
 
+    #[derive(Debug)]
     pub struct Scope {
         env: HashMap<String, Value>,
         parent: Option<Rc<RefCell<Scope>>>,
@@ -574,22 +570,49 @@ mod environment {
         }
 
         pub fn pop(&mut self) -> Result<(), AtGlobalScopeError> {
-            let Some(parent) = std::mem::take(&mut self.0.parent) else {
+            let Some(parent) = std::mem::take(&mut self.0.borrow_mut().parent) else {
                 return Err(AtGlobalScopeError);
             };
             replace_with_or_abort(&mut self.0, |_| parent);
             Ok(())
         }
 
-        pub fn get(&mut self, key: String) -> Result<Cow<Value>, String> {
-            let scope = self.0.borrow_mut();
-            let parent_scope = match scope.parent {
-                None => return Ok()
+        pub fn get(&mut self, mut key: String) -> Result<Cow<Value>, String> {
+            let mut scope = self.0.clone();
+            loop {
+                key = match scope.borrow_mut().env.entry(key) {
+                    Entry::Occupied(entry) => return Ok(Cow::Owned(entry.get().clone())), // can't get around this anymore...
+                    Entry::Vacant(vacant) => vacant.into_key(),
+                };
+                let parent = match &scope.borrow_mut().parent {
+                    None => return Err(key),
+                    Some(parent) => parent.clone(),
+                };
+                scope = parent;
             }
-            let key = match scope.env.entry(key) {
-                entry @ Entry::Occupied(_) => return Ok(Cow::Borrowed(entry.into_mut())),
-                Entry::Vacant(vacant) => vacant.into_key(),
-            };
+        }
+
+        pub fn declare(&mut self, key: String, value: Value) {
+            let mut scope = self.0.borrow_mut();
+            scope.env.insert(key, value);
+        }
+
+        pub fn assign(&mut self, mut key: String, value: Value) -> Result<Cow<Value>, String> {
+            let mut scope = self.0.clone();
+            loop {
+                key = match scope.borrow_mut().env.entry(key) {
+                    Entry::Occupied(mut entry) => {
+                        entry.insert(value);
+                        return Ok(Cow::Owned(entry.get().clone())); // had to discard this optimization :(
+                    }
+                    Entry::Vacant(vacant) => vacant.into_key(),
+                };
+                let parent = match &scope.borrow_mut().parent {
+                    None => return Err(key),
+                    Some(parent) => parent.clone(),
+                };
+                scope = parent;
+            }
         }
     }
 
@@ -605,24 +628,21 @@ type ExpressionEvalResultCow<'a> = Result<Cow<'a, Value>, EvalError>;
 
 pub struct Interpreter {
     environment: Environment,
-    scope_handle: ScopeHandle,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
-        let (environment, scope_handle) = Environment::new();
         let mut this = Self {
-            environment,
-            scope_handle,
+            environment: Environment::new(),
         };
-        let handle = this.environment.dupe(&this.scope_handle).unwrap();
-        this.environment
-            .entry(&this.scope_handle, "clock".into())
-            .or_insert(Value::Function(Function {
+        this.environment.declare(
+            "clock".into(),
+            Value::Function(Function {
                 arity: 0,
-                scope: Rc::new(handle),
+                environment: this.environment.clone(),
                 implementation: FunctionImplementation::Clock,
-            })); // insert clock native function into global scope
+            }),
+        ); // insert clock native function into global scope
         this
     }
 
@@ -688,29 +708,21 @@ impl Interpreter {
                         .into_owned(), // own must occur in order to store the value
                     None => Value::Uninitialized,
                 };
-                self.environment
-                    .top_entry(&self.scope_handle, name.to_owned())
-                    .insert(value);
+                self.environment.declare(name.to_owned(), value);
             }
             Statement::Block(statements) => {
-                replace_with_or_abort(&mut self.scope_handle, |handle| {
-                    self.environment.push(handle)
-                });
+                self.environment.push();
                 let result = self
                     .block(statements)
                     .with_maybe_signaled_err_at(Error::BlockEvaluation, location);
-                replace_with_or_abort(&mut self.scope_handle, |handle| {
-                    self.environment
-                        .pop(handle)
-                        .expect("Will always have just pushed a scope")
-                });
+                self.environment
+                    .pop()
+                    .expect("Will always have just pushed a scope");
                 result?;
             }
             Statement::Function(name, parameters, body) => {
                 let function = self.function_declaration(parameters.clone(), body.clone())?;
-                self.environment
-                    .entry(&self.scope_handle, name.item.clone())
-                    .insert(function)
+                self.environment.declare(name.item.clone(), function);
             }
         }
         Ok(())
@@ -801,10 +813,9 @@ impl Interpreter {
         parameters: Rc<Vec<Located<String>>>,
         body: Rc<Located<Statement>>,
     ) -> ExpressionEvalResult {
-        let new_handle = self.environment.dupe(&self.scope_handle).unwrap();
         Ok(Value::Function(Function {
             arity: parameters.len(),
-            scope: Rc::new(new_handle),
+            environment: self.environment.clone(),
             implementation: FunctionImplementation::Lox(parameters, body), // rc clones, cheap
         }))
     }
@@ -814,12 +825,13 @@ impl Interpreter {
     }
 
     fn variable(&mut self, name: String) -> Result<Cow<Value>, Error> {
-        match self.environment.entry(&self.scope_handle, name) {
-            Entry::Occupied(occupied) => match occupied.get() {
-                Value::Uninitialized => Err(Error::UninitializedVariable(occupied.key().clone())), // error contents must be owned (no `OccupiedEntry::into_key` 🙁)
-                _ => Ok(Cow::Borrowed(occupied.into_mut())),
+        let key = name.clone();
+        match self.environment.get(name) {
+            Ok(value) => match value.as_ref() {
+                Value::Uninitialized => Err(Error::UninitializedVariable(key)),
+                _ => Ok(value),
             },
-            Entry::Vacant(vacant) => Err(Error::UndeclaredVariable(vacant.into_key())),
+            Err(key) => Err(Error::UndeclaredVariable(key)),
         }
     }
 
@@ -830,14 +842,9 @@ impl Interpreter {
     ) -> ExpressionEvalResultCow<'a> {
         let (name, location) = name.split();
         let value = self.evaluate(expression)?.into_owned(); // own must occur in order to store the value
-        match self.environment.entry(&self.scope_handle, name) {
-            Entry::Vacant(vacant) => Err(Error::UndeclaredVariable(vacant.into_key())
-                .at(&location)
-                .no_signal()),
-            Entry::Occupied(mut entry) => {
-                entry.insert(value);
-                Ok(Cow::Borrowed(entry.into_mut())) // everything is cows so that i can write this line here :>
-            }
+        match self.environment.assign(name, value) {
+            Err(key) => Err(Error::UndeclaredVariable(key).at(&location).no_signal()),
+            Ok(value) => Ok(value),
         }
     }
 
@@ -1025,23 +1032,17 @@ mod tests {
 
     #[test]
     fn test() {
-        let (mut env, mut handle) = Environment::new();
-        env.entry(&handle, "x".to_string())
-            .or_insert(Value::Number(5.0));
-        env.entry(&handle, "y".to_string())
-            .or_insert(Value::Number(10.0));
-        handle = env.push(handle);
-        env.entry(&handle, "x".to_string())
-            .and_modify(|x| *x = Value::Number(40.0));
-        env.entry(&handle, "z".to_string())
-            .or_insert(Value::Number(607.0));
+        let mut env = Environment::new();
+        env.declare("x".to_string(), Value::Number(5.0));
+        env.declare("y".to_string(), Value::Number(10.0));
+        env.push();
+        let _ = env.assign("x".to_string(), Value::Number(40.0));
+        env.declare("z".to_string(), Value::Number(607.0));
         dbg!(&env);
-        env.top_entry(&handle, "x".to_string())
-            .or_insert(Value::Number(900.0));
+        env.declare("x".to_string(), Value::Number(900.0));
         dbg!(&env);
-        handle = env.pop(handle).unwrap();
-        env.entry(&handle, "x".to_string())
-            .and_modify(|x| *x = Value::Number(18.0));
+        env.pop().unwrap();
+        let _ = env.assign("x".to_string(), Value::Number(18.0));
         dbg!(&env);
     }
 }
