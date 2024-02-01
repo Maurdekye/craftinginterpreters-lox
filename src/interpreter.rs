@@ -1,5 +1,6 @@
 use std::{
     borrow::{Borrow, Cow},
+    collections::HashMap,
     fmt::Display,
     rc::Rc,
     time::SystemTime,
@@ -12,7 +13,7 @@ use crate::{
     parser::{Expression, Statement},
     util::{
         AppendLocatedError, AppendLocatedErrorWithSignal, AsOwned, Locateable, Located, LocatedAt,
-        Signaling, SignalingResult,
+        Location, Signaling, SignalingResult,
     },
 };
 
@@ -366,6 +367,29 @@ mod environment {
             }
         }
 
+        fn ancestor(&mut self, depth: usize) -> Option<Rc<RefCell<Scope>>> {
+            let mut scope = self.0.clone();
+            for _ in 0..depth {
+                let parent = match &scope.borrow_mut().parent {
+                    None => return None,
+                    Some(parent) => parent.clone(),
+                };
+                scope = parent;
+            }
+            Some(scope)
+        }
+
+        pub fn get_at(&mut self, key: String, depth: usize) -> Result<Cow<Value>, String> {
+            let Some(scope) = self.ancestor(depth) else {
+                return Err(key);
+            };
+            let result = match scope.borrow_mut().env.entry(key) {
+                Entry::Occupied(entry) => Ok(Cow::Owned(entry.get().clone())),
+                Entry::Vacant(vacant) => Err(vacant.into_key()),
+            };
+            result
+        }
+
         pub fn declare(&mut self, key: String, value: Value) {
             let mut scope = self.0.borrow_mut();
             scope.env.insert(key, value);
@@ -388,6 +412,25 @@ mod environment {
                 scope = parent;
             }
         }
+
+        pub fn assign_at(
+            &mut self,
+            key: String,
+            value: Value,
+            depth: usize,
+        ) -> Result<Cow<Value>, String> {
+            let Some(scope) = self.ancestor(depth) else {
+                return Err(key);
+            };
+            let result = match scope.borrow_mut().env.entry(key) {
+                Entry::Occupied(mut entry) => {
+                    entry.insert(value);
+                    Ok(Cow::Owned(entry.get().clone())) // had to discard this optimization :(
+                }
+                Entry::Vacant(vacant) => Err(vacant.into_key()),
+            };
+            result
+        }
     }
 
     #[derive(Clone, Debug, ThisError)]
@@ -402,12 +445,17 @@ type ExpressionEvalResultCow<'a> = Result<Cow<'a, Value>, EvalError>;
 
 pub struct Interpreter {
     environment: Environment,
+    globals: Environment,
+    locals: HashMap<Location, usize>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
+        let globals = Environment::new();
         let mut this = Self {
-            environment: Environment::new(),
+            environment: globals.clone(),
+            globals,
+            locals: HashMap::new(),
         };
         this.environment.declare(
             "clock".into(),
@@ -555,7 +603,7 @@ impl Interpreter {
                 .with_err_at(Error::InvalidLiteral, location)
                 .map_err(MaybeWithSignal::NoSignal),
             Expression::Variable(name) => self
-                .variable(name.to_owned())
+                .variable(name.to_owned(), location)
                 .with_err_at(Error::VariableResolution, location)
                 .map_err(MaybeWithSignal::NoSignal),
             Expression::Assignment(name, sub_expression) => self
@@ -598,9 +646,14 @@ impl Interpreter {
         literal.item.clone().try_into() // must clone the literal to resolve its value
     }
 
-    fn variable(&mut self, name: String) -> Result<Cow<Value>, Error> {
+    fn variable(&mut self, name: String, location: &Location) -> Result<Cow<Value>, Error> {
         let key = name.clone();
-        match self.environment.get(name) {
+        let depth = self.locals.get(&location);
+        match if let Some(&depth) = depth {
+            self.environment.get_at(name, depth)
+        } else {
+            self.globals.get(name)
+        } {
             Ok(value) => match value.as_ref() {
                 Value::Uninitialized => Err(Error::UninitializedVariable(key)),
                 _ => Ok(value),
@@ -616,7 +669,11 @@ impl Interpreter {
     ) -> ExpressionEvalResultCow<'a> {
         let (name, location) = name.split();
         let value = self.evaluate(expression)?.into_owned(); // own must occur in order to store the value
-        match self.environment.assign(name, value) {
+        match if let Some(depth) = self.locals.get(&location) {
+            self.environment.assign_at(name, value, *depth)
+        } else {
+            self.globals.assign(name, value)
+        } {
             Err(key) => Err(Error::UndeclaredVariable(key).at(&location).no_signal()),
             Ok(value) => Ok(value),
         }
@@ -799,8 +856,8 @@ impl Interpreter {
         }
     }
 
-    pub fn resolve(&mut self, name: String, i: usize) {
-        todo!()
+    pub fn resolve(&mut self, location: Location, i: usize) {
+        self.locals.insert(location, i);
     }
 }
 

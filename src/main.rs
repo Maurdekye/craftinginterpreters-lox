@@ -26,6 +26,8 @@ pub enum Error {
     Lexer(#[from] Located<lexer::Error>),
     #[error("Parser Error:\n{0}")]
     Parser(#[from] MaybeLocated<parser::Error>),
+    #[error("Resolver Error:\n{0}")]
+    Resolver(#[from] Located<resolver::Error>),
     #[error("Interpreter Error:\n{0}")]
     Interpreter(#[from] Located<interpreter::Error>),
 }
@@ -72,6 +74,10 @@ fn run_with(source: String, interpreter: &mut Interpreter) -> Result<(), Errors<
     let Some(statements) = parser.parse().errors_into(&mut errors) else {
         return Err(errors);
     };
+    let mut resolver = resolver::Resolver::new(interpreter);
+    let Some(()) = resolver.resolve(&statements).error_into(&mut errors) else {
+        return Err(errors);
+    };
     let Some(()) = interpreter.interpret(&statements).error_into(&mut errors) else {
         return Err(errors);
     };
@@ -90,6 +96,10 @@ fn eval_with(source: String, interpreter: &mut Interpreter) -> Result<Value, Err
     });
     let mut parser = parser::Parser::new(tokens);
     let Some(expression) = parser.expression().error_into(&mut errors) else {
+        return Err(errors);
+    };
+    let mut resolver = resolver::Resolver::new(interpreter);
+    let Some(()) = resolver.expression(&expression).error_into(&mut errors) else {
         return Err(errors);
     };
     let Some(value) = interpreter

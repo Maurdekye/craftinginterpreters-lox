@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
-    interpreter::{self, Interpreter},
+    interpreter::Interpreter,
     parser::{Expression, Statement},
-    util::{Locateable, Located, LocatedAt},
+    util::{Locateable, Located, LocatedAt, Location},
 };
 
 use thiserror::Error as ThisError;
@@ -11,7 +11,7 @@ use thiserror::Error as ThisError;
 macro_rules! split_ref {
     ($located:expr => |$item:ident, $location:ident| $body:block) => {{
         let located = $located;
-        let $location = &located.location();
+        let $location = located.location();
         let $item = &located.item;
         $body
     }};
@@ -99,18 +99,18 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    fn expression(&mut self, expression: &Located<Expression>) -> ResolverResult {
+    pub fn expression(&mut self, expression: &Located<Expression>) -> ResolverResult {
         split_ref!(expression => |expression, location| {
             match expression {
                 Expression::Variable(name) => {
-                    if self.scopes.last_mut().and_then(|s| s.get(name)).copied().unwrap_or(false) {
-                        return Err(Error::VariableReadDuringInitialize.at(location));
+                    if self.scopes.last_mut().and_then(|s| s.get(name)).map(|s| !*s).unwrap_or(false) {
+                        return Err(Error::VariableReadDuringInitialize.at(&location));
                     }
-                    self.resolve_local(name)?;
+                    self.resolve_local(name, location)?;
                 }
                 Expression::Assignment(name, value_expression) => {
                     self.expression(value_expression.as_ref())?;
-                    self.resolve_local(&name.item)?;
+                    self.resolve_local(&name.item, location)?;
                 }
                 Expression::Binary(_, lhs_expression, rhs_expression) => {
                     self.expression(lhs_expression)?;
@@ -154,10 +154,10 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    fn resolve_local(&mut self, name: &String) -> ResolverResult {
+    fn resolve_local(&mut self, name: &String, location: Location) -> ResolverResult {
         for (i, scope) in self.scopes.iter().rev().enumerate() {
             if scope.contains_key(name) {
-                self.interpreter.resolve(name.clone(), i);
+                self.interpreter.resolve(location, i);
                 break;
             }
         }

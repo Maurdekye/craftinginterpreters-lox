@@ -59,7 +59,7 @@ impl<I: Iterator> Iterator for Peekable<I> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, std::hash::Hash, PartialEq, Eq)]
 pub struct Location {
     pub line: usize,
     pub character: usize,
