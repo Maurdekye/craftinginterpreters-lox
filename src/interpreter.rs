@@ -798,6 +798,10 @@ impl Interpreter {
             self.evaluate(false_branch_expr)
         }
     }
+
+    pub fn resolve(&mut self, name: String, i: usize) {
+        todo!()
+    }
 }
 
 #[cfg(test)]

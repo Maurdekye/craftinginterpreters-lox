@@ -326,7 +326,7 @@ impl Iterator for Tokens<'_> {
                 let result = Some(Err(Error::UnterminatedString.at(self)));
                 self.line = new_line;
                 self.character = new_character;
-                return result
+                return result;
             }
 
             // match number literals

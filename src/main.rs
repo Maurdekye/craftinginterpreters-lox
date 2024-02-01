@@ -17,6 +17,7 @@ use crate::{interpreter::Interpreter, util::ErrorsInto};
 mod interpreter;
 mod lexer;
 mod parser;
+mod resolver;
 mod util;
 
 #[derive(Clone, Debug, ThisError)]
