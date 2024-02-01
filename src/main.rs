@@ -128,7 +128,6 @@ struct Args {
 
 fn _main() -> Result<(), RootError> {
     let args = Args::parse();
-    // let args = Args::parse_from(["_", "test.lox"]);
 
     match (args.file, args.source) {
         // run code inline
@@ -176,6 +175,31 @@ fn main() -> ExitCode {
         Err(err) => {
             eprintln!("{err}");
             err.report()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::run;
+
+    #[test]
+    fn resolver() {
+        if let Err(errs) = run(r#"
+var a = "global";
+{
+  fun showA() {
+    print a;
+  }
+
+  showA();
+  var a = "block";
+  showA();
+  print "a: " + a;
+}"#
+        .to_string())
+        {
+            eprintln!("{errs}");
         }
     }
 }

@@ -32,19 +32,31 @@ pub enum Error {
     BreakFromOutsideLoop,
     #[error("Can't continue outside of a loop")]
     ContinueFromOutsideLoop,
+    #[error("Variable '{0}' is undefined")]
+    UndefinedVariable(String),
+    #[error("Declaration '{0}' is unused")]
+    UnusedDeclaration(String),
 }
 
 enum FunctionType {
     None,
     Function,
 }
+
 enum LoopType {
     None,
     Loop,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum VarState {
+    Declared,
+    Defined,
+    Used,
+}
+
 pub struct Resolver<'a> {
-    scopes: Vec<HashMap<String, bool>>,
+    scopes: Vec<HashMap<String, Located<VarState>>>,
     interpreter: &'a mut Interpreter,
     function_type: FunctionType,
     loop_type: LoopType,
@@ -63,13 +75,14 @@ impl<'a> Resolver<'a> {
     }
 
     pub fn resolve(&mut self, statements: &Vec<Located<Statement>>) -> ResolverResult {
+        self.scopes.push(HashMap::new());
         for statement in statements {
             self.statement(statement)?;
         }
-        Ok(())
+        self.pop_scope()
     }
 
-    fn set_value(&mut self, name: String, value: bool) {
+    fn set_value(&mut self, name: String, value: Located<VarState>) {
         self.scopes
             .last_mut()
             .map(|s| s.insert(name.clone(), value));
@@ -79,20 +92,18 @@ impl<'a> Resolver<'a> {
         split_ref!(statement => |statement, location| {
             match statement {
                 Statement::Block(statements) => {
-                    self.scopes.push(HashMap::new());
                     self.resolve(statements)?;
-                    self.scopes.pop();
                 }
                 Statement::Var(name, initializer) => {
-                    self.set_value(name.clone(), false);
+                    self.set_value(name.clone(), VarState::Declared.at(&location));
                     if let Some(initializer) = initializer {
                         self.expression(initializer)?;
                     }
-                    self.set_value(name.clone(), true);
+                    self.set_value(name.clone(), VarState::Defined.at(&location));
                 }
                 Statement::Function(name, parameters, body) => {
-                    self.set_value(name.item.clone(), true);
-                    self.function(parameters, body.as_ref(), FunctionType::Function)?;
+                    self.set_value(name.item.clone(), VarState::Defined.at(&location));
+                    self.function(parameters, body.as_ref(), FunctionType::Function, &location)?;
                 }
                 Statement::Expression(expression)
                 | Statement::Print(expression) => {
@@ -138,7 +149,7 @@ impl<'a> Resolver<'a> {
         split_ref!(expression => |expression, location| {
             match expression {
                 Expression::Variable(name) => {
-                    if self.scopes.last_mut().and_then(|s| s.get(name)).map(|s| !*s).unwrap_or(false) {
+                    if self.scopes.last_mut().and_then(|s| s.get(name)).map(|s| s.item == VarState::Declared).unwrap_or(false) {
                         return Err(Error::VariableReadDuringInitialize.at(&location));
                     }
                     self.resolve_local(name, location)?;
@@ -167,7 +178,7 @@ impl<'a> Resolver<'a> {
                     self.expression(false_expression)?;
                 },
                 Expression::Lambda(parameters, body) => {
-                    self.function(parameters, body.as_ref(), FunctionType::Function)?;
+                    self.function(parameters, body.as_ref(), FunctionType::Function, &location)?;
                 },
                 Expression::Literal(_) => (),
             }
@@ -175,30 +186,44 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
+    fn pop_scope(&mut self) -> ResolverResult {
+        if let Some((name, located)) = self.scopes.pop().and_then(|scope| {
+            scope
+                .into_iter()
+                .find(|(_, state)| state.item != VarState::Used)
+        }) {
+            Err(Error::UnusedDeclaration(name.clone()).at(&located))
+        } else {
+            Ok(())
+        }
+    }
+
     fn function(
         &mut self,
         parameters: &Vec<Located<String>>,
         body: &Located<Statement>,
         function_type: FunctionType,
+        location: &impl Locateable,
     ) -> ResolverResult {
         let enclosing_type = std::mem::replace(&mut self.function_type, function_type);
         self.scopes.push(HashMap::new());
         for parameter in parameters.iter() {
-            self.set_value(parameter.item.clone(), true);
+            self.set_value(parameter.item.clone(), VarState::Defined.at(location));
         }
         self.statement(body)?;
-        self.scopes.pop();
+        self.pop_scope()?;
         self.function_type = enclosing_type;
         Ok(())
     }
 
     fn resolve_local(&mut self, name: &String, location: Location) -> ResolverResult {
-        for (i, scope) in self.scopes.iter().rev().enumerate() {
+        for (i, scope) in self.scopes.iter_mut().rev().enumerate() {
             if scope.contains_key(name) {
+                scope.insert(name.clone(), VarState::Used.at(&location));
                 self.interpreter.resolve(location, i);
-                break;
+                return Ok(());
             }
         }
-        Ok(())
+        Err(Error::UndefinedVariable(name.clone()).at(&location))
     }
 }
