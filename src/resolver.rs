@@ -26,11 +26,28 @@ macro_rules! split_ref {
 pub enum Error {
     #[error("Can't read local variable in its own initializer")]
     VariableReadDuringInitialize,
+    #[error("Can't return outside of a function")]
+    ReturnFromOutsideFunction,
+    #[error("Can't break outside of a loop")]
+    BreakFromOutsideLoop,
+    #[error("Can't continue outside of a loop")]
+    ContinueFromOutsideLoop,
+}
+
+enum FunctionType {
+    None,
+    Function,
+}
+enum LoopType {
+    None,
+    Loop,
 }
 
 pub struct Resolver<'a> {
     scopes: Vec<HashMap<String, bool>>,
     interpreter: &'a mut Interpreter,
+    function_type: FunctionType,
+    loop_type: LoopType,
 }
 
 type ResolverResult = Result<(), Located<Error>>;
@@ -40,6 +57,8 @@ impl<'a> Resolver<'a> {
         Self {
             scopes: Vec::new(),
             interpreter: interpreter,
+            function_type: FunctionType::None,
+            loop_type: LoopType::None,
         }
     }
 
@@ -57,7 +76,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn statement(&mut self, statement: &Located<Statement>) -> ResolverResult {
-        split_ref!(statement => |statement, _| {
+        split_ref!(statement => |statement, location| {
             match statement {
                 Statement::Block(statements) => {
                     self.scopes.push(HashMap::new());
@@ -73,11 +92,10 @@ impl<'a> Resolver<'a> {
                 }
                 Statement::Function(name, parameters, body) => {
                     self.set_value(name.item.clone(), true);
-                    self.function(parameters, body.as_ref())?;
+                    self.function(parameters, body.as_ref(), FunctionType::Function)?;
                 }
                 Statement::Expression(expression)
-                | Statement::Print(expression)
-                | Statement::Return(Some(expression)) => {
+                | Statement::Print(expression) => {
                     self.expression(expression)?;
                 }
                 Statement::If(condition, true_branch, false_branch) => {
@@ -88,12 +106,29 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 Statement::While(condition, body) => {
+                    let enclosing_type = std::mem::replace(&mut self.loop_type, LoopType::Loop);
                     self.expression(condition)?;
                     self.statement(body)?;
+                    self.loop_type = enclosing_type;
                 }
-                Statement::Break
-                | Statement::Continue
-                | Statement::Return(None) => (),
+                Statement::Break => {
+                    if let LoopType::None = self.loop_type {
+                        return Err(Error::BreakFromOutsideLoop.at(&location))
+                    }
+                }
+                Statement::Continue => {
+                    if let LoopType::None = self.loop_type {
+                        return Err(Error::ContinueFromOutsideLoop.at(&location))
+                    }
+                }
+                Statement::Return(expression) => {
+                    if let FunctionType::None = self.function_type {
+                        return Err(Error::ReturnFromOutsideFunction.at(&location))
+                    }
+                    if let Some(expression) = expression {
+                        self.expression(expression)?;
+                    }
+                }
             }
         });
         Ok(())
@@ -132,7 +167,7 @@ impl<'a> Resolver<'a> {
                     self.expression(false_expression)?;
                 },
                 Expression::Lambda(parameters, body) => {
-                    self.function(parameters, body.as_ref())?;
+                    self.function(parameters, body.as_ref(), FunctionType::Function)?;
                 },
                 Expression::Literal(_) => (),
             }
@@ -144,13 +179,16 @@ impl<'a> Resolver<'a> {
         &mut self,
         parameters: &Vec<Located<String>>,
         body: &Located<Statement>,
+        function_type: FunctionType,
     ) -> ResolverResult {
+        let enclosing_type = std::mem::replace(&mut self.function_type, function_type);
         self.scopes.push(HashMap::new());
         for parameter in parameters.iter() {
             self.set_value(parameter.item.clone(), true);
         }
         self.statement(body)?;
         self.scopes.pop();
+        self.function_type = enclosing_type;
         Ok(())
     }
 
