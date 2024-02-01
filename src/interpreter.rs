@@ -1,25 +1,17 @@
-use std::{
-    borrow::{Borrow, Cow},
-    collections::HashMap,
-    fmt::Display,
-    rc::Rc,
-    time::SystemTime,
-};
-
-use polonius_the_crab::{exit_polonius, polonius, polonius_return, polonius_try};
+use std::{borrow::Borrow, collections::HashMap, fmt::Display, rc::Rc, time::SystemTime};
 
 use crate::{
     lexer::Token,
     parser::{Expression, Statement},
     util::{
-        AppendLocatedError, AppendLocatedErrorWithSignal, AsOwned, Locateable, Located, LocatedAt,
-        Location, Signaling, SignalingResult,
+        AppendLocatedError, AppendLocatedErrorWithSignal, Locateable, Located, LocatedAt, Location,
+        Signaling, SignalingResult,
     },
 };
 
 use thiserror::Error as ThisError;
 
-use self::environment::Environment;
+use self::environment::{AsThunk, Environment, ValueThunk};
 
 #[derive(Clone, Debug, ThisError)]
 pub enum Error {
@@ -298,9 +290,14 @@ impl TryFrom<Token> for Value {
     }
 }
 
+impl Default for Value {
+    fn default() -> Self {
+        Value::Nil
+    }
+}
+
 mod environment {
     use std::{
-        borrow::Cow,
         cell::RefCell,
         collections::{hash_map::Entry, HashMap},
         rc::Rc,
@@ -310,6 +307,49 @@ mod environment {
     use thiserror::Error as ThisError;
 
     use super::Value;
+
+    pub enum ValueThunk {
+        Thunk {
+            scope: Rc<RefCell<Scope>>,
+            ident: String,
+        },
+        Value(Value),
+    }
+
+    impl ValueThunk {
+        pub fn into_owned(self) -> Value {
+            match self {
+                ValueThunk::Thunk { scope, ident } => {
+                    scope.borrow().env.get(&ident).cloned().unwrap_or_default()
+                }
+                ValueThunk::Value(value) => value,
+            }
+        }
+
+        // not possible :(
+        // pub fn get(&self) -> &Value {
+        //     match self {
+        //         ValueThunk::Thunk { scope, ident } => {
+        //             scope.borrow().env.get(ident).unwrap_or(&Value::Nil)
+        //         }
+        //         ValueThunk::Value(value) => &value,
+        //     }
+        // }
+    }
+
+    pub trait AsThunk {
+        type Output;
+
+        fn as_thunk(self) -> Self::Output;
+    }
+
+    impl<E> AsThunk for Result<Value, E> {
+        type Output = Result<ValueThunk, E>;
+
+        fn as_thunk(self) -> Self::Output {
+            self.map(ValueThunk::Value)
+        }
+    }
 
     #[derive(Debug)]
     pub struct Scope {
@@ -352,11 +392,11 @@ mod environment {
             Ok(())
         }
 
-        pub fn get(&mut self, mut key: String) -> Result<Cow<Value>, String> {
+        pub fn get(&mut self, mut key: String) -> Result<Value, String> {
             let mut scope = self.0.clone();
             loop {
                 key = match scope.borrow_mut().env.entry(key) {
-                    Entry::Occupied(entry) => return Ok(Cow::Owned(entry.get().clone())), // can't get around this anymore...
+                    Entry::Occupied(entry) => return Ok(entry.get().clone()),
                     Entry::Vacant(vacant) => vacant.into_key(),
                 };
                 let parent = match &scope.borrow_mut().parent {
@@ -379,12 +419,12 @@ mod environment {
             Some(scope)
         }
 
-        pub fn get_at(&mut self, key: String, depth: usize) -> Result<Cow<Value>, String> {
+        pub fn get_at(&mut self, key: String, depth: usize) -> Result<Value, String> {
             let Some(scope) = self.ancestor(depth) else {
                 return Err(key);
             };
             let result = match scope.borrow_mut().env.entry(key) {
-                Entry::Occupied(entry) => Ok(Cow::Owned(entry.get().clone())),
+                Entry::Occupied(entry) => Ok(entry.get().clone()),
                 Entry::Vacant(vacant) => Err(vacant.into_key()),
             };
             result
@@ -395,13 +435,16 @@ mod environment {
             scope.env.insert(key, value);
         }
 
-        pub fn assign(&mut self, mut key: String, value: Value) -> Result<Cow<Value>, String> {
+        pub fn assign(&mut self, mut key: String, value: Value) -> Result<ValueThunk, String> {
             let mut scope = self.0.clone();
             loop {
-                key = match scope.borrow_mut().env.entry(key) {
+                key = match scope.borrow_mut().env.entry(key.clone()) {
                     Entry::Occupied(mut entry) => {
                         entry.insert(value);
-                        return Ok(Cow::Owned(entry.get().clone())); // had to discard this optimization :(
+                        return Ok(ValueThunk::Thunk {
+                            scope: scope.clone(),
+                            ident: key,
+                        }); // new ver. of optimization (may actually be slower)
                     }
                     Entry::Vacant(vacant) => vacant.into_key(),
                 };
@@ -418,14 +461,17 @@ mod environment {
             key: String,
             value: Value,
             depth: usize,
-        ) -> Result<Cow<Value>, String> {
+        ) -> Result<ValueThunk, String> {
             let Some(scope) = self.ancestor(depth) else {
                 return Err(key);
             };
-            let result = match scope.borrow_mut().env.entry(key) {
+            let result = match scope.borrow_mut().env.entry(key.clone()) {
                 Entry::Occupied(mut entry) => {
                     entry.insert(value);
-                    Ok(Cow::Owned(entry.get().clone())) // had to discard this optimization :(
+                    Ok(ValueThunk::Thunk {
+                        scope: scope.clone(),
+                        ident: key,
+                    }) // new ver. of optimization (may actually be slower)
                 }
                 Entry::Vacant(vacant) => Err(vacant.into_key()),
             };
@@ -441,7 +487,7 @@ mod environment {
 type EvalError = MaybeWithSignal<Located<Error>>;
 type StatementEvalResult = Result<(), EvalError>;
 type ExpressionEvalResult = Result<Value, EvalError>;
-type ExpressionEvalResultCow<'a> = Result<Cow<'a, Value>, EvalError>;
+type ExpressionEvalResultThunk = Result<ValueThunk, EvalError>;
 
 pub struct Interpreter {
     environment: Environment,
@@ -495,7 +541,7 @@ impl Interpreter {
                     .as_ref()
                     .map(|value| self.evaluate(value))
                     .transpose()
-                    .map(|ok| ok.map(Cow::into_owned))?; // return value of function must be owned
+                    .map(|ok| ok.map(ValueThunk::into_owned))?; // return value of function must be owned
                 return Err(Error::InvalidReturn
                     .at(location)
                     .signaling(Signal::Return(return_value)));
@@ -512,11 +558,10 @@ impl Interpreter {
                 let result = self
                     .evaluate(expression)
                     .with_maybe_signaled_err_at(Error::PrintEvaluation, location)?;
-                let repr: Cow<'_, String> = match result.borrow() {
-                    Value::String(s) => Cow::Borrowed(s),
-                    value => Cow::Owned(format!("{value}")),
-                };
-                println!("{repr}");
+                match result.into_owned() {
+                    Value::String(s) => println!("{s}"),
+                    value => println!("{value}"),
+                }
             }
             Statement::Expression(expression) => {
                 self.evaluate(expression)
@@ -557,9 +602,8 @@ impl Interpreter {
         false_branch: &Option<Located<Statement>>,
     ) -> StatementEvalResult {
         if {
-            let condition_value = self.evaluate(condition)?;
-            let condition_value: &Value = condition_value.borrow();
-            condition_value.into()
+            let condition_value = self.evaluate(condition)?.into_owned();
+            (&condition_value).into()
         } {
             self.statement(true_branch)?;
         } else if let Some(false_branch) = false_branch {
@@ -574,9 +618,8 @@ impl Interpreter {
         body: &Located<Statement>,
     ) -> StatementEvalResult {
         while {
-            let condition_value = self.evaluate(condition)?;
-            let condition_value: &Value = condition_value.borrow();
-            condition_value.into()
+            let condition_value = self.evaluate(condition)?.into_owned();
+            (&condition_value).into()
         } {
             match self.statement(body) {
                 Err(MaybeWithSignal::WithSignal(_, Signal::Break)) => break,
@@ -594,26 +637,27 @@ impl Interpreter {
         Ok(())
     }
 
-    pub fn evaluate(&mut self, expression: &Located<Expression>) -> ExpressionEvalResultCow<'_> {
+    pub fn evaluate(&mut self, expression: &Located<Expression>) -> ExpressionEvalResultThunk {
         let location = &expression.location();
         match &expression.item {
             Expression::Literal(literal_token) => self
                 .literal(literal_token)
-                .as_owned()
                 .with_err_at(Error::InvalidLiteral, location)
-                .map_err(MaybeWithSignal::NoSignal),
+                .map_err(MaybeWithSignal::NoSignal)
+                .as_thunk(),
             Expression::Variable(name) => self
                 .variable(name.to_owned(), location)
                 .with_err_at(Error::VariableResolution, location)
-                .map_err(MaybeWithSignal::NoSignal),
+                .map_err(MaybeWithSignal::NoSignal)
+                .as_thunk(),
             Expression::Assignment(name, sub_expression) => self
                 .assignment(name.clone(), sub_expression) // clone is necessary, because variable reassignment may occur
                 .with_maybe_signaled_err_at(Error::AssignmentEvaluation, location),
             Expression::Grouping(sub_expression) => self.evaluate(sub_expression),
             Expression::Unary(unary_operator, unary_expr) => self
                 .unary(unary_operator, unary_expr)
-                .as_owned()
-                .with_maybe_signaled_err_at(Error::UnaryEvaluation, location),
+                .with_maybe_signaled_err_at(Error::UnaryEvaluation, location)
+                .as_thunk(),
             Expression::Binary(binary_operator, lhs_expr, rhs_expr) => self
                 .binary(binary_operator, lhs_expr, rhs_expr)
                 .with_maybe_signaled_err_at(Error::BinaryEvaluation, location),
@@ -622,11 +666,11 @@ impl Interpreter {
                 .with_maybe_signaled_err_at(Error::TernaryEvaluation, location),
             Expression::Call(function, arguments) => self
                 .call(function.as_ref(), &arguments[..])
-                .as_owned()
-                .with_maybe_signaled_err_at(Error::FunctionCall, location),
+                .with_maybe_signaled_err_at(Error::FunctionCall, location)
+                .as_thunk(),
             Expression::Lambda(parameters, body) => self
                 .function_declaration(parameters.clone(), body.clone())
-                .as_owned(),
+                .as_thunk(),
         }
     }
 
@@ -646,7 +690,7 @@ impl Interpreter {
         literal.item.clone().try_into() // must clone the literal to resolve its value
     }
 
-    fn variable(&mut self, name: String, location: &Location) -> Result<Cow<Value>, Error> {
+    fn variable(&mut self, name: String, location: &Location) -> Result<Value, Error> {
         let key = name.clone();
         let depth = self.locals.get(&location);
         match if let Some(&depth) = depth {
@@ -654,7 +698,7 @@ impl Interpreter {
         } else {
             self.globals.get(name)
         } {
-            Ok(value) => match value.as_ref() {
+            Ok(value) => match value {
                 Value::Uninitialized => Err(Error::UninitializedVariable(key)),
                 _ => Ok(value),
             },
@@ -662,11 +706,11 @@ impl Interpreter {
         }
     }
 
-    fn assignment<'a>(
-        &'a mut self,
+    fn assignment(
+        &mut self,
         name: Located<String>,
         expression: &Located<Expression>,
-    ) -> ExpressionEvalResultCow<'a> {
+    ) -> ExpressionEvalResultThunk {
         let (name, location) = name.split();
         let value = self.evaluate(expression)?.into_owned(); // own must occur in order to store the value
         match if let Some(depth) = self.locals.get(&location) {
@@ -686,13 +730,13 @@ impl Interpreter {
     ) -> ExpressionEvalResult {
         let location = unary.location();
         let value = self.evaluate(unary_expr)?;
-        match (&unary.item, value.borrow()) {
+        match (&unary.item, value.into_owned()) {
             (Token::Minus, Value::Number(value)) => Ok(Value::Number(-value)),
             (Token::Bang, operand) => {
-                let bool_value: bool = operand.into();
+                let bool_value: bool = (&operand).into();
                 Ok((!bool_value).into())
             }
-            (unary, _) => Err(Error::InvalidUnary(unary.clone(), value.into_owned())
+            (unary, value) => Err(Error::InvalidUnary(unary.clone(), value)
                 .at(&location)
                 .no_signal()), // error contents must be owned
         }
@@ -734,26 +778,18 @@ impl Interpreter {
         binary: &Located<Token>,
         lhs_expr: &Located<Expression>,
         rhs_expr: &Located<Expression>,
-    ) -> ExpressionEvalResultCow<'_> {
+    ) -> ExpressionEvalResultThunk {
         let binary_location = binary.location();
         let lhs_location = lhs_expr.location();
 
-        let mut this = self; // cannot use polonius_the_crab on `self`
+        let lhs_value = self.evaluate(lhs_expr)?.into_owned();
 
-        let (lhs_truthiness, lhs_value) = polonius!(|this| -> ExpressionEvalResultCow<'polonius> {
-            let lhs_value = polonius_try!(this.evaluate(lhs_expr));
+        let lhs_truthiness = match ((&lhs_value).into(), &binary.item) {
+            (false, Token::And) | (true, Token::Or) => return Ok(ValueThunk::Value(lhs_value)),
+            (lhs_truthiness, _) => lhs_truthiness,
+        };
 
-            // match short circuit boolean operations before evaluating right hand side
-            let lhs_borrow: &Value = lhs_value.borrow();
-            match (lhs_borrow.into(), &binary.item) {
-                (false, Token::And) | (true, Token::Or) => {
-                    polonius_return!(Ok(lhs_value));
-                }
-                (lhs_truthiness, _) => exit_polonius!((lhs_truthiness, lhs_value.into_owned())), // this own may not be cheap, but it is unavoidable, because we must also borrow rhs 😔
-            };
-        });
-
-        let rhs_value = this.evaluate(rhs_expr)?;
+        let rhs_value = self.evaluate(rhs_expr)?;
 
         // finish short circuit boolean evaluation
         match (lhs_truthiness, &binary.item) {
@@ -763,80 +799,78 @@ impl Interpreter {
             _ => (),
         }
 
-        match (lhs_value.borrow(), &binary.item, rhs_value.borrow()) {
+        match (lhs_value, &binary.item, rhs_value.into_owned()) {
             // equality
-            (lhs, Token::EqualEqual, rhs) => Ok(Cow::Owned((lhs == rhs).into())),
-            (lhs, Token::BangEqual, rhs) => Ok(Cow::Owned((lhs != rhs).into())),
+            (lhs, Token::EqualEqual, rhs) => Ok(ValueThunk::Value((lhs == rhs).into())),
+            (lhs, Token::BangEqual, rhs) => Ok(ValueThunk::Value((lhs != rhs).into())),
 
             // comparison
             (Value::Number(lhs), Token::Less, Value::Number(rhs)) => {
-                Ok(Cow::Owned((lhs < rhs).into()))
+                Ok(ValueThunk::Value((lhs < rhs).into()))
             }
             (Value::Number(lhs), Token::LessEqual, Value::Number(rhs)) => {
-                Ok(Cow::Owned((lhs <= rhs).into()))
+                Ok(ValueThunk::Value((lhs <= rhs).into()))
             }
             (Value::Number(lhs), Token::Greater, Value::Number(rhs)) => {
-                Ok(Cow::Owned((lhs > rhs).into()))
+                Ok(ValueThunk::Value((lhs > rhs).into()))
             }
             (Value::Number(lhs), Token::GreaterEqual, Value::Number(rhs)) => {
-                Ok(Cow::Owned((lhs >= rhs).into()))
+                Ok(ValueThunk::Value((lhs >= rhs).into()))
             }
             (Value::String(lhs), Token::Less, Value::String(rhs)) => {
-                Ok(Cow::Owned((lhs < rhs).into()))
+                Ok(ValueThunk::Value((lhs < rhs).into()))
             }
             (Value::String(lhs), Token::LessEqual, Value::String(rhs)) => {
-                Ok(Cow::Owned((lhs <= rhs).into()))
+                Ok(ValueThunk::Value((lhs <= rhs).into()))
             }
             (Value::String(lhs), Token::Greater, Value::String(rhs)) => {
-                Ok(Cow::Owned((lhs > rhs).into()))
+                Ok(ValueThunk::Value((lhs > rhs).into()))
             }
             (Value::String(lhs), Token::GreaterEqual, Value::String(rhs)) => {
-                Ok(Cow::Owned((lhs >= rhs).into()))
+                Ok(ValueThunk::Value((lhs >= rhs).into()))
             }
 
             // arithmetic
-            (_, Token::Slash, Value::Number(rhs)) if rhs.borrow() == &0.0 => {
+            (lhs_value, Token::Slash, Value::Number(rhs)) if rhs.borrow() == &0.0 => {
                 Err(Error::DivisionByZero(lhs_value)
                     .at(&lhs_location)
                     .no_signal())
             }
             (Value::Number(lhs), Token::Minus, Value::Number(rhs)) => {
-                Ok(Cow::Owned(Value::Number(lhs - rhs)))
+                Ok(ValueThunk::Value(Value::Number(lhs - rhs)))
             }
             (Value::Number(lhs), Token::Plus, Value::Number(rhs)) => {
-                Ok(Cow::Owned(Value::Number(lhs + rhs)))
+                Ok(ValueThunk::Value(Value::Number(lhs + rhs)))
             }
             (Value::Number(lhs), Token::Star, Value::Number(rhs)) => {
-                Ok(Cow::Owned(Value::Number(lhs * rhs)))
+                Ok(ValueThunk::Value(Value::Number(lhs * rhs)))
             }
             (Value::Number(lhs), Token::Slash, Value::Number(rhs)) => {
-                Ok(Cow::Owned(Value::Number(lhs / rhs)))
+                Ok(ValueThunk::Value(Value::Number(lhs / rhs)))
             }
 
             // string concatenation
             (Value::String(lhs), Token::Plus, Value::String(rhs)) => {
-                Ok(Cow::Owned(Value::String(format!("{lhs}{rhs}"))))
+                Ok(ValueThunk::Value(Value::String(format!("{lhs}{rhs}"))))
             }
             (Value::String(lhs), Token::Plus, rhs) => {
-                Ok(Cow::Owned(Value::String(format!("{lhs}{rhs}"))))
+                Ok(ValueThunk::Value(Value::String(format!("{lhs}{rhs}"))))
             }
             (lhs, Token::Plus, Value::String(rhs)) => {
-                Ok(Cow::Owned(Value::String(format!("{lhs}{rhs}"))))
+                Ok(ValueThunk::Value(Value::String(format!("{lhs}{rhs}"))))
             }
 
             // string cycling
             (Value::String(string), Token::Star, Value::Number(quantity))
-            | (Value::Number(quantity), Token::Star, Value::String(string)) => {
-                Ok(Cow::Owned(Value::String(string.repeat(*quantity as usize))))
-            }
+            | (Value::Number(quantity), Token::Star, Value::String(string)) => Ok(
+                ValueThunk::Value(Value::String(string.repeat(quantity as usize))),
+            ),
 
             // invalid
-            (_, operator, _) => {
-                Err(
-                    Error::InvalidBinary(lhs_value, operator.clone(), rhs_value.into_owned())
-                        .at(&binary_location)
-                        .no_signal(),
-                ) // error contents must be owned
+            (lhs_value, operator, rhs_value) => {
+                Err(Error::InvalidBinary(lhs_value, operator.clone(), rhs_value)
+                    .at(&binary_location)
+                    .no_signal()) // error contents must be owned
             }
         }
     }
@@ -846,10 +880,9 @@ impl Interpreter {
         condition_expr: &Located<Expression>,
         true_branch_expr: &Located<Expression>,
         false_branch_expr: &Located<Expression>,
-    ) -> ExpressionEvalResultCow<'_> {
-        let condition_value = self.evaluate(condition_expr)?;
-        let condition_bool: &Value = condition_value.borrow();
-        if condition_bool.into() {
+    ) -> ExpressionEvalResultThunk {
+        let condition_value = self.evaluate(condition_expr)?.into_owned();
+        if (&condition_value).into() {
             self.evaluate(true_branch_expr)
         } else {
             self.evaluate(false_branch_expr)
