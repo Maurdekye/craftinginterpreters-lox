@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 use crate::{
     interpreter::Interpreter,
@@ -60,7 +60,6 @@ pub struct Resolver<'a> {
     interpreter: &'a mut Interpreter,
     function_type: FunctionType,
     loop_type: LoopType,
-    variable_ids: HashMap<(String, usize), usize>,
 }
 
 type ResolverResult = Result<(), Located<Error>>;
@@ -72,7 +71,6 @@ impl<'a> Resolver<'a> {
             interpreter: interpreter,
             function_type: FunctionType::None,
             loop_type: LoopType::None,
-            variable_ids: HashMap::new(),
         }
     }
 
@@ -153,8 +151,6 @@ impl<'a> Resolver<'a> {
         location: Location,
         state: VarState,
     ) -> ResolverResult {
-        self.variable_ids
-            .insert((name.clone(), self.scopes.len()), self.variable_ids.len());
         self.set_value(name.clone(), state.at(&location));
         Ok(())
     }
