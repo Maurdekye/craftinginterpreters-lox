@@ -1,12 +1,10 @@
-use std::{borrow::Borrow, collections::HashMap, fmt::Display, rc::Rc, time::SystemTime};
+use std::{borrow::Borrow, collections::{HashMap, HashSet}, fmt::Display, hash::Hash, rc::Rc, time::SystemTime};
 
 use crate::{
-    lexer::Token,
-    parser::{Expression, Statement},
-    util::{
+    lexer::Token, parser::{Expression, Statement}, resolver::ReferenceId, util::{
         AppendLocatedError, AppendLocatedErrorWithSignal, Locateable, Located, LocatedAt, Location,
         Signaling, SignalingResult,
-    },
+    }
 };
 
 use thiserror::Error as ThisError;
@@ -109,7 +107,6 @@ pub enum FunctionImplementation {
 #[derive(Clone, Debug)]
 pub struct Function {
     arity: usize,
-    environment: Environment,
     implementation: FunctionImplementation,
 }
 
@@ -121,13 +118,6 @@ impl Function {
     ) -> ExpressionEvalResult {
         match &self.implementation {
             FunctionImplementation::Lox(parameters, body) => {
-                // substitute interpreter's scope with function's scope during execution
-                let prior_scope =
-                    std::mem::replace(&mut interpreter.environment, self.environment.clone());
-
-                // new scope for function body
-                interpreter.environment.push();
-
                 // register parameters as variables in the function body
                 for (name, value) in parameters.iter().map(|s| s.item.clone()).zip(args) {
                     interpreter.environment.declare(name, value);
@@ -490,24 +480,28 @@ type ExpressionEvalResult = Result<Value, EvalError>;
 type ExpressionEvalResultThunk = Result<ValueThunk, EvalError>;
 
 pub struct Interpreter {
-    environment: Environment,
-    globals: Environment,
-    locals: HashMap<Location, usize>,
+    // environment: Environment,
+    // globals: Environment,
+    // locals: HashMap<Location, usize>,
+    globals: HashMap<String, Value>,
+    locals: Vec<Value>,
+    visited_ids: HashSet<ReferenceId>,
+    location_ids: HashMap<Location, usize>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
         let globals = Environment::new();
         let mut this = Self {
-            environment: globals.clone(),
-            globals,
-            locals: HashMap::new(),
+            globals: HashMap::new(),
+            locals: Vec::new(),
+            visited_ids: HashSet::new(),
+            location_ids: HashMap::new(),
         };
-        this.environment.declare(
+        this.globals.insert(
             "clock".into(),
             Value::Function(Function {
                 arity: 0,
-                environment: this.environment.clone(),
                 implementation: FunctionImplementation::Clock,
             }),
         ); // insert clock native function into global scope
@@ -889,7 +883,7 @@ impl Interpreter {
         }
     }
 
-    pub fn resolve(&mut self, location: Location, i: usize) {
+    pub fn resolve(&mut self, location: Location, id: ReferenceId) {
         self.locals.insert(location, i);
     }
 }

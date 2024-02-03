@@ -55,12 +55,17 @@ enum VarState {
     Used,
 }
 
+pub struct ReferenceId {
+    path: Vec<usize>,
+    identifier: String,
+}
+
 pub struct Resolver<'a> {
     scopes: Vec<HashMap<String, Located<VarState>>>,
+    scope_ids: Vec<usize>,
     interpreter: &'a mut Interpreter,
     function_type: FunctionType,
     loop_type: LoopType,
-    variable_ids: HashMap<(String, usize), usize>,
 }
 
 type ResolverResult = Result<(), Located<Error>>;
@@ -69,15 +74,15 @@ impl<'a> Resolver<'a> {
     pub fn new(interpreter: &'a mut Interpreter) -> Self {
         Self {
             scopes: Vec::new(),
+            scope_ids: Vec::new(),
             interpreter: interpreter,
             function_type: FunctionType::None,
             loop_type: LoopType::None,
-            variable_ids: HashMap::new(),
         }
     }
 
     pub fn resolve(&mut self, statements: &Vec<Located<Statement>>) -> ResolverResult {
-        self.scopes.push(HashMap::new());
+        self.push_scope()?;
         for statement in statements {
             self.statement(statement)?;
         }
@@ -200,6 +205,16 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
+    fn push_scope(&mut self) -> ResolverResult {
+        self.scopes.push(HashMap::new());
+        if self.scope_ids.len() < self.scopes.len() {
+            self.scope_ids.push(0);
+        } else {
+            self.scope_ids[self.scopes.len() - 1] += 1;
+        }
+        Ok(())
+    }
+
     fn pop_scope(&mut self) -> ResolverResult {
         if let Some((name, located)) = self.scopes.pop().and_then(|scope| {
             scope
@@ -220,7 +235,7 @@ impl<'a> Resolver<'a> {
         location: &impl Locateable,
     ) -> ResolverResult {
         let enclosing_type = std::mem::replace(&mut self.function_type, function_type);
-        self.scopes.push(HashMap::new());
+        self.push_scope()?;
         for parameter in parameters.iter() {
             self.set_value(parameter.item.clone(), VarState::Defined.at(location));
         }
@@ -231,10 +246,14 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve_local(&mut self, name: &String, location: Location) -> ResolverResult {
-        for (i, scope) in self.scopes.iter_mut().rev().enumerate() {
+        for (i, scope) in self.scopes.iter_mut().enumerate().rev() {
             if scope.contains_key(name) {
                 scope.insert(name.clone(), VarState::Used.at(&location));
-                self.interpreter.resolve(location, i);
+                let ref_id = ReferenceId {
+                    identifier: name.clone(),
+                    path: self.scope_ids[..i].to_vec(),
+                };
+                self.interpreter.resolve(location, ref_id);
                 return Ok(());
             }
         }
