@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 
 use crate::{
     interpreter::Interpreter,
@@ -60,6 +60,7 @@ pub struct Resolver<'a> {
     interpreter: &'a mut Interpreter,
     function_type: FunctionType,
     loop_type: LoopType,
+    variable_ids: HashMap<(String, usize), usize>,
 }
 
 type ResolverResult = Result<(), Located<Error>>;
@@ -71,6 +72,7 @@ impl<'a> Resolver<'a> {
             interpreter: interpreter,
             function_type: FunctionType::None,
             loop_type: LoopType::None,
+            variable_ids: HashMap::new(),
         }
     }
 
@@ -95,14 +97,14 @@ impl<'a> Resolver<'a> {
                     self.resolve(statements)?;
                 }
                 Statement::Var(name, initializer) => {
-                    self.set_value(name.clone(), VarState::Declared.at(&location));
+                    self.resolve_declaration(name.clone(), location.clone(), VarState::Declared)?;
                     if let Some(initializer) = initializer {
                         self.expression(initializer)?;
                     }
                     self.set_value(name.clone(), VarState::Defined.at(&location));
                 }
                 Statement::Function(name, parameters, body) => {
-                    self.set_value(name.item.clone(), VarState::Defined.at(&location));
+                    self.resolve_declaration(name.item.clone(), location.clone(), VarState::Defined)?;
                     self.function(parameters, body.as_ref(), FunctionType::Function, &location)?;
                 }
                 Statement::Expression(expression)
@@ -142,6 +144,18 @@ impl<'a> Resolver<'a> {
                 }
             }
         });
+        Ok(())
+    }
+
+    fn resolve_declaration(
+        &mut self,
+        name: String,
+        location: Location,
+        state: VarState,
+    ) -> ResolverResult {
+        self.variable_ids
+            .insert((name.clone(), self.scopes.len()), self.variable_ids.len());
+        self.set_value(name.clone(), state.at(&location));
         Ok(())
     }
 
