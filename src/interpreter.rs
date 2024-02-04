@@ -589,7 +589,11 @@ impl Interpreter {
             }
             Statement::Function(name, parameters, body) => {
                 let function = self.function_declaration(parameters.clone(), body.clone())?;
-                self.environment.declare(name.item.clone(), function);
+                self.environment.declare(name.clone(), function);
+            }
+            Statement::Class(name, functions) => {
+                let class = self.class_declaration(functions.clone())?;
+                self.environment.declare(name.clone(), class);
             }
         }
         Ok(())
@@ -684,6 +688,13 @@ impl Interpreter {
             environment: self.environment.clone(),
             implementation: FunctionImplementation::Lox(parameters, body), // rc clones, cheap
         }))
+    }
+
+    fn class_declaration(
+        &mut self,
+        functions: Rc<Vec<Located<Statement>>>,
+    ) -> ExpressionEvalResult {
+        Ok(Value::Class(Class))
     }
 
     fn literal(&mut self, literal: &Located<Token>) -> Result<Value, Token> {

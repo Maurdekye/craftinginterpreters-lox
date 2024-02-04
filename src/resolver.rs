@@ -56,8 +56,8 @@ enum VarState {
 }
 
 pub struct Resolver<'a> {
-    scopes: Vec<HashMap<String, Located<VarState>>>,
     interpreter: &'a mut Interpreter,
+    scopes: Vec<HashMap<String, Located<VarState>>>,
     function_type: FunctionType,
     loop_type: LoopType,
 }
@@ -67,8 +67,8 @@ type ResolverResult = Result<(), Located<Error>>;
 impl<'a> Resolver<'a> {
     pub fn new(interpreter: &'a mut Interpreter) -> Self {
         Self {
+            interpreter,
             scopes: Vec::new(),
-            interpreter: interpreter,
             function_type: FunctionType::None,
             loop_type: LoopType::None,
         }
@@ -101,8 +101,11 @@ impl<'a> Resolver<'a> {
                     }
                     self.set_value(name.clone(), VarState::Defined.at(&location));
                 }
+                Statement::Class(name, _) => {
+                    self.resolve_declaration(name.clone(), location, VarState::Defined);
+                }
                 Statement::Function(name, parameters, body) => {
-                    self.resolve_declaration(name.item.clone(), location.clone(), VarState::Defined)?;
+                    self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
                     self.function(parameters, body.as_ref(), FunctionType::Function)?;
                 }
                 Statement::Expression(expression)

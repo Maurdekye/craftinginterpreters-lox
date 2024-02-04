@@ -311,6 +311,12 @@ impl<E> Errors<E> {
     }
 }
 
+impl<E> From<E> for Errors<E> {
+    fn from(value: E) -> Self {
+        once(value).collect()
+    }
+}
+
 pub trait ErrorsInto<E, T> {
     /// Extract the errors from a result and push them into an
     /// Errors collection, then transform the result into an Option
@@ -481,3 +487,29 @@ impl<T, E: Sized> SignalingResult for Result<T, E> {
         self.map_err(Signaling::no_signal)
     }
 }
+
+pub struct Indented<'a, T>(&'a T, usize)
+where
+    T: ?Sized;
+
+impl<'a, T> Display for Indented<'a, T>
+where
+    T: Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let lines = format!("{}", self.0);
+        let indent = " ".repeat(self.1);
+        for line in lines.split("\n") {
+            writeln!(f, "{indent}{line}")?;
+        }
+        Ok(())
+    }
+}
+
+pub trait Indent: Display {
+    fn indented(&self, indent: usize) -> Indented<Self> {
+        Indented(self, indent)
+    }
+}
+
+impl<T> Indent for T where T: Display {}

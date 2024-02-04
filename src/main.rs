@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn resolver() {
-        if let Err(errs) = run(r#"
+        assert!(run(r#"
 var a = "global";
 {
   fun showA() {
@@ -198,8 +198,6 @@ var a = "global";
   print "a: " + a;
 }"#
         .to_string())
-        {
-            eprintln!("{errs}");
-        }
+        .is_ok());
     }
 }

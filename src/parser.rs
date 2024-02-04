@@ -8,8 +8,8 @@ use thiserror::Error as ThisError;
 use crate::{
     lexer::Token,
     util::{
-        AppendMaybeLocatedError, Errors, Locateable, Located, LocatedAt, Location, MaybeLocated,
-        MaybeLocatedAt, Peekable,
+        AppendMaybeLocatedError, Errors, Indent, Locateable, Located, LocatedAt, Location,
+        MaybeLocated, MaybeLocatedAt, Peekable,
     },
 };
 
@@ -31,6 +31,8 @@ pub enum Error {
     ExpressionStatementParse(Box<MaybeLocated<Error>>),
     #[error("In this function declaration:\n{0}")]
     FunctionDeclarationParse(Box<MaybeLocated<Error>>),
+    #[error("In this class declaration:\n{0}")]
+    ClassDeclarationParse(Errors<MaybeLocated<Error>>),
 
     #[error("In this ternary:\n{0}")]
     TernaryParse(Box<MaybeLocated<Error>>),
@@ -47,6 +49,8 @@ pub enum Error {
         "Was expecting a comma or closing paren while reading function arguments, but got a '{0}'"
     )]
     UnexpectedArgumentToken(Token),
+    #[error("Where's the class name?")]
+    MissingClassName,
     #[error("Where's the function name?")]
     MissingFunctionName,
     #[error("Where's the variable name?")]
@@ -140,11 +144,8 @@ impl Display for Expression {
 
 #[derive(Clone, Debug)]
 pub enum Statement {
-    Function(
-        Located<String>,
-        Rc<Vec<Located<String>>>,
-        Rc<Located<Statement>>,
-    ),
+    Class(String, Rc<Vec<Located<Statement>>>),
+    Function(String, Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
     Print(Located<Expression>),
     Expression(Located<Expression>),
     Var(String, Option<Located<Expression>>),
@@ -163,11 +164,18 @@ pub enum Statement {
 impl Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Statement::Class(name, functions) => {
+                writeln!(f, "(class {}", name)?;
+                for function in functions.iter() {
+                    writeln!(f, "{}", function.indented(2))?;
+                }
+                writeln!(f, ")")
+            }
             Statement::Function(name, args, body) => {
                 writeln!(
                     f,
                     "(fun {} ({}) {})",
-                    name.item,
+                    name,
                     args.iter()
                         .map(|a| a.item.clone())
                         .collect::<Vec<_>>()
@@ -186,21 +194,21 @@ impl Display for Statement {
             Statement::Block(statements) => {
                 writeln!(f, "(block")?;
                 for statement in statements {
-                    write!(f, "  {}", statement.item)?;
+                    write!(f, "{}", statement.item.indented(2))?;
                 }
                 writeln!(f, ")")
             }
             Statement::If(condition, true_branch, false_branch) => {
                 writeln!(f, "(if {condition}")?;
-                write!(f, "  {true_branch}")?;
+                write!(f, "{}", true_branch.indented(2))?;
                 if let Some(false_branch) = false_branch.as_ref() {
-                    write!(f, "  {false_branch}")?;
+                    write!(f, "{}", false_branch.indented(2))?;
                 }
                 writeln!(f, ")")
             }
             Statement::While(condition, body) => {
                 writeln!(f, "(while {condition}")?;
-                write!(f, "  {body}")?;
+                write!(f, "{}", body.indented(2))?;
                 writeln!(f, ")")
             }
             Statement::Break => {
@@ -366,6 +374,7 @@ where
             match token {
                 Token::Var => self.var(location).with_err_located_at(Error::VarParse, location),
                 Token::Fun => self.function(location).with_err_located_at(Error::FunctionDeclarationParse, location),
+                Token::Class => self.class(location).with_err_located_at(Error::ClassDeclarationParse, location),
                 _ => self.statement(),
             }
         })
@@ -430,6 +439,10 @@ where
 
     fn function(&mut self, location: &impl Locateable) -> StatementParseResult {
         self.tokens.next();
+        self.method(location)
+    }
+
+    fn method(&mut self, location: &impl Locateable) -> StatementParseResult {
         let Some(Located {
             item: Token::Identifier(name),
             ..
@@ -439,7 +452,47 @@ where
         };
         let parameters = self.function_parameters()?;
         let body = self.statement()?;
-        Ok(Statement::Function(name.at(location), parameters.into(), body.into()).at(location))
+        Ok(Statement::Function(name, parameters.into(), body.into()).at(location))
+    }
+
+    fn class(&mut self, location: &impl Locateable) -> StatementParseResultErrors {
+        self.tokens.next();
+        let Some(Located {
+            item: Token::Identifier(name),
+            ..
+        }) = self.tokens.next()
+        else {
+            return Err(Error::MissingClassName.located_at(location).into());
+        };
+        consume_token!(self, LeftBrace)?;
+        let mut functions = Vec::new();
+        let mut errors = Errors::new();
+        loop {
+            split_ref_some_errors!(self.tokens.peek() => |token, location| {
+                match token {
+                    Token::RightBrace => {
+                        self.tokens.next();
+                        break;
+                    }
+                    Token::Eof => {
+                        errors.push(
+                            Error::UndesiredToken(Token::RightBrace, Token::Eof).located_at(location),
+                        );
+                        break;
+                    }
+                    _ => {
+                        match self.method(location) {
+                            Ok(function) => functions.push(function),
+                            Err(err) => {
+                                errors.push(err);
+                                self.synchronize();
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        errors.empty_ok(Statement::Class(name, functions.into()).at(location))
     }
 
     fn statement(&mut self) -> StatementParseResult {
