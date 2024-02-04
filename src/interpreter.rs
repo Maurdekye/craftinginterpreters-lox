@@ -177,12 +177,14 @@ impl Display for FunctionImplementation {
 }
 
 #[derive(Clone, Debug)]
-pub struct Class;
+pub struct Class {
+    name: String,
+}
 
 #[derive(Clone, Debug)]
 pub enum Callable {
     Function(Function),
-    Class(Class),
+    Class(Rc<Class>),
 }
 
 impl Callable {
@@ -193,14 +195,16 @@ impl Callable {
     ) -> ExpressionEvalResult {
         match self {
             Callable::Function(function) => function.call(interpreter, args),
-            Callable::Class(_class) => todo!(),
+            Callable::Class(class) => Ok(Value::Instance(Instance {
+                class: class.clone(),
+            })),
         }
     }
 
     pub fn arity(&self) -> usize {
         match self {
             Callable::Function(function) => function.arity,
-            Callable::Class(_class) => todo!(),
+            Callable::Class(_) => 0,
         }
     }
 }
@@ -218,11 +222,17 @@ impl TryFrom<Value> for Callable {
 }
 
 #[derive(Clone, Debug)]
+pub struct Instance {
+    class: Rc<Class>,
+}
+
+#[derive(Clone, Debug)]
 pub enum Value {
     Function(Function),
-    Class(Class),
+    Class(Rc<Class>),
     String(String),
     Number(f64),
+    Instance(Instance),
     True,
     False,
     Nil,
@@ -263,10 +273,11 @@ impl Into<bool> for &Value {
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Function(fun) => write!(f, "<{}>", fun.implementation),
-            Value::Class(_c) => todo!("implement classes first"),
-            Value::String(s) => write!(f, "\"{s}\""),
-            Value::Number(n) => write!(f, "{n}"),
+            Value::Function(function) => write!(f, "<{}>", function.implementation),
+            Value::Class(class) => write!(f, "{}", class.name),
+            Value::String(string) => write!(f, "\"{string}\""),
+            Value::Number(number) => write!(f, "{number}"),
+            Value::Instance(instance) => write!(f, "{} instance", instance.class.name),
             Value::True => write!(f, "true"),
             Value::False => write!(f, "false"),
             Value::Nil => write!(f, "nil"),
@@ -592,8 +603,11 @@ impl Interpreter {
                 self.environment.declare(name.clone(), function);
             }
             Statement::Class(name, functions) => {
-                let class = self.class_declaration(functions.clone())?;
-                self.environment.declare(name.clone(), class);
+                self.environment.declare(name.clone(), Value::Nil);
+                let class = self.class_declaration(name.clone(), functions.clone())?;
+                self.environment
+                    .assign(name.clone(), class)
+                    .expect("We just declared the variable in the current scope");
             }
         }
         Ok(())
@@ -692,9 +706,10 @@ impl Interpreter {
 
     fn class_declaration(
         &mut self,
+        name: String,
         functions: Rc<Vec<Located<Statement>>>,
     ) -> ExpressionEvalResult {
-        Ok(Value::Class(Class))
+        Ok(Value::Class(Rc::new(Class { name })))
     }
 
     fn literal(&mut self, literal: &Located<Token>) -> Result<Value, Token> {

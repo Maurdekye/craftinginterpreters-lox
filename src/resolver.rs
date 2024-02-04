@@ -102,7 +102,7 @@ impl<'a> Resolver<'a> {
                     self.set_value(name.clone(), VarState::Defined.at(&location));
                 }
                 Statement::Class(name, _) => {
-                    self.resolve_declaration(name.clone(), location, VarState::Defined);
+                    self.resolve_declaration(name.clone(), location, VarState::Defined)?;
                 }
                 Statement::Function(name, parameters, body) => {
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;

@@ -200,4 +200,28 @@ var a = "global";
         .to_string())
         .is_ok());
     }
+
+    #[test]
+    fn classes() {
+        assert!(run(r#"
+class DevonshireCream {
+    serveOn() {
+        return "Scones";
+    }
+}
+
+print DevonshireCream;"#
+            .to_string())
+        .is_ok());
+    }
+
+    #[test]
+    fn instance() {
+        assert!(run(r#"
+class Bagel {}
+var bagel = Bagel();
+print bagel;"#
+            .to_string())
+        .is_ok());
+    }
 }
