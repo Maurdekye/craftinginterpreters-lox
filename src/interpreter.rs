@@ -149,7 +149,7 @@ impl Function {
                     .expect("Will always have just pushed a scope");
 
                 // return interpreter's scope back to prior state
-                let _ = std::mem::replace(&mut interpreter.environment, prior_scope);
+                interpreter.environment = prior_scope;
 
                 // return result
                 return_val

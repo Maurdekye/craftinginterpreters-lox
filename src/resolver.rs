@@ -103,7 +103,7 @@ impl<'a> Resolver<'a> {
                 }
                 Statement::Function(name, parameters, body) => {
                     self.resolve_declaration(name.item.clone(), location.clone(), VarState::Defined)?;
-                    self.function(parameters, body.as_ref(), FunctionType::Function, &location)?;
+                    self.function(parameters, body.as_ref(), FunctionType::Function)?;
                 }
                 Statement::Expression(expression)
                 | Statement::Print(expression) => {
@@ -188,7 +188,7 @@ impl<'a> Resolver<'a> {
                     self.expression(false_expression)?;
                 },
                 Expression::Lambda(parameters, body) => {
-                    self.function(parameters, body.as_ref(), FunctionType::Function, &location)?;
+                    self.function(parameters, body.as_ref(), FunctionType::Function)?;
                 },
                 Expression::Literal(_) => (),
             }
@@ -213,12 +213,15 @@ impl<'a> Resolver<'a> {
         parameters: &Vec<Located<String>>,
         body: &Located<Statement>,
         function_type: FunctionType,
-        location: &impl Locateable,
     ) -> ResolverResult {
         let enclosing_type = std::mem::replace(&mut self.function_type, function_type);
         self.scopes.push(HashMap::new());
         for parameter in parameters.iter() {
-            self.set_value(parameter.item.clone(), VarState::Defined.at(location));
+            self.resolve_declaration(
+                parameter.item.clone(),
+                parameter.location(),
+                VarState::Defined,
+            )?;
         }
         self.statement(body)?;
         self.pop_scope()?;
