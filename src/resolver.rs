@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash};
+use std::collections::{hash_map::Entry, HashMap};
 
 use crate::{
     interpreter::Interpreter,
@@ -48,22 +48,22 @@ enum LoopType {
     Loop,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum VarState {
     Declared,
     Defined,
     Used,
 }
 
-pub struct ReferenceId {
-    path: Vec<usize>,
-    identifier: String,
+struct Variable {
+    state: VarState,
+    location: Location,
+    id: usize,
 }
 
 pub struct Resolver<'a> {
-    scopes: Vec<HashMap<String, Located<VarState>>>,
-    scope_ids: Vec<usize>,
     interpreter: &'a mut Interpreter,
+    scopes: Vec<HashMap<String, Variable>>,
     function_type: FunctionType,
     loop_type: LoopType,
 }
@@ -73,9 +73,8 @@ type ResolverResult = Result<(), Located<Error>>;
 impl<'a> Resolver<'a> {
     pub fn new(interpreter: &'a mut Interpreter) -> Self {
         Self {
+            interpreter,
             scopes: Vec::new(),
-            scope_ids: Vec::new(),
-            interpreter: interpreter,
             function_type: FunctionType::None,
             loop_type: LoopType::None,
         }
@@ -89,10 +88,22 @@ impl<'a> Resolver<'a> {
         self.pop_scope()
     }
 
-    fn set_value(&mut self, name: String, value: Located<VarState>) {
-        self.scopes
-            .last_mut()
-            .map(|s| s.insert(name.clone(), value));
+    fn set_value(&mut self, name: String, value: Located<VarState>) -> Option<&mut Variable> {
+        let (state, location) = value.split();
+        self.scopes.last_mut().map(|scope| {
+            let id = scope.len();
+            match scope.entry(name) {
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().state = state;
+                    entry.into_mut()
+                }
+                Entry::Vacant(vacant) => vacant.insert(Variable {
+                    state,
+                    location,
+                    id,
+                }),
+            }
+        })
     }
 
     fn statement(&mut self, statement: &Located<Statement>) -> ResolverResult {
@@ -110,7 +121,7 @@ impl<'a> Resolver<'a> {
                 }
                 Statement::Function(name, parameters, body) => {
                     self.resolve_declaration(name.item.clone(), location.clone(), VarState::Defined)?;
-                    self.function(parameters, body.as_ref(), FunctionType::Function, &location)?;
+                    self.function(parameters, body.as_ref(), FunctionType::Function)?;
                 }
                 Statement::Expression(expression)
                 | Statement::Print(expression) => {
@@ -158,9 +169,11 @@ impl<'a> Resolver<'a> {
         location: Location,
         state: VarState,
     ) -> ResolverResult {
-        self.variable_ids
-            .insert((name.clone(), self.scopes.len()), self.variable_ids.len());
-        self.set_value(name.clone(), state.at(&location));
+        let id = self
+            .set_value(name.clone(), state.at(&location))
+            .expect("There should always be a scope")
+            .id;
+        self.interpreter.resolve(location, 0, id);
         Ok(())
     }
 
@@ -168,14 +181,14 @@ impl<'a> Resolver<'a> {
         split_ref!(expression => |expression, location| {
             match expression {
                 Expression::Variable(name) => {
-                    if self.scopes.last_mut().and_then(|s| s.get(name)).map(|s| s.item == VarState::Declared).unwrap_or(false) {
+                    if self.scopes.last_mut().and_then(|s| s.get(name)).map(|s| s.state == VarState::Declared).unwrap_or(false) {
                         return Err(Error::VariableReadDuringInitialize.at(&location));
                     }
-                    self.resolve_local(name, location)?;
+                    self.resolve_local(name.clone(), location)?;
                 }
                 Expression::Assignment(name, value_expression) => {
                     self.expression(value_expression.as_ref())?;
-                    self.resolve_local(&name.item, location)?;
+                    self.resolve_local(name.item.clone(), location)?;
                 }
                 Expression::Binary(_, lhs_expression, rhs_expression) => {
                     self.expression(lhs_expression)?;
@@ -197,7 +210,7 @@ impl<'a> Resolver<'a> {
                     self.expression(false_expression)?;
                 },
                 Expression::Lambda(parameters, body) => {
-                    self.function(parameters, body.as_ref(), FunctionType::Function, &location)?;
+                    self.function(parameters, body.as_ref(), FunctionType::Function)?;
                 },
                 Expression::Literal(_) => (),
             }
@@ -207,21 +220,16 @@ impl<'a> Resolver<'a> {
 
     fn push_scope(&mut self) -> ResolverResult {
         self.scopes.push(HashMap::new());
-        if self.scope_ids.len() < self.scopes.len() {
-            self.scope_ids.push(0);
-        } else {
-            self.scope_ids[self.scopes.len() - 1] += 1;
-        }
         Ok(())
     }
 
     fn pop_scope(&mut self) -> ResolverResult {
-        if let Some((name, located)) = self.scopes.pop().and_then(|scope| {
+        if let Some((name, var)) = self.scopes.pop().and_then(|scope| {
             scope
                 .into_iter()
-                .find(|(_, state)| state.item != VarState::Used)
+                .find(|(_, var)| var.state != VarState::Used)
         }) {
-            Err(Error::UnusedDeclaration(name.clone()).at(&located))
+            Err(Error::UnusedDeclaration(name.clone()).at(&var.location))
         } else {
             Ok(())
         }
@@ -232,12 +240,15 @@ impl<'a> Resolver<'a> {
         parameters: &Vec<Located<String>>,
         body: &Located<Statement>,
         function_type: FunctionType,
-        location: &impl Locateable,
     ) -> ResolverResult {
         let enclosing_type = std::mem::replace(&mut self.function_type, function_type);
         self.push_scope()?;
         for parameter in parameters.iter() {
-            self.set_value(parameter.item.clone(), VarState::Defined.at(location));
+            self.resolve_declaration(
+                parameter.item.clone(),
+                parameter.location(),
+                VarState::Defined,
+            )?;
         }
         self.statement(body)?;
         self.pop_scope()?;
@@ -245,18 +256,18 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    fn resolve_local(&mut self, name: &String, location: Location) -> ResolverResult {
-        for (i, scope) in self.scopes.iter_mut().enumerate().rev() {
-            if scope.contains_key(name) {
-                scope.insert(name.clone(), VarState::Used.at(&location));
-                let ref_id = ReferenceId {
-                    identifier: name.clone(),
-                    path: self.scope_ids[..i].to_vec(),
-                };
-                self.interpreter.resolve(location, ref_id);
-                return Ok(());
-            }
+    fn resolve_local(&mut self, mut name: String, location: Location) -> ResolverResult {
+        for (i, scope) in self.scopes.iter_mut().rev().enumerate() {
+            name = match scope.entry(name) {
+                Entry::Occupied(mut entry) => {
+                    let entry = entry.get_mut();
+                    entry.state = VarState::Used;
+                    self.interpreter.resolve(location, i, entry.id);
+                    return Ok(());
+                }
+                Entry::Vacant(vacant) => vacant.into_key(),
+            };
         }
-        Err(Error::UndefinedVariable(name.clone()).at(&location))
+        Err(Error::UndefinedVariable(name).at(&location))
     }
 }

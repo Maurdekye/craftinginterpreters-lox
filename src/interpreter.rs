@@ -1,10 +1,12 @@
-use std::{borrow::Borrow, collections::{HashMap, HashSet}, fmt::Display, hash::Hash, rc::Rc, time::SystemTime};
+use std::{borrow::Borrow, collections::HashMap, fmt::Display, rc::Rc, time::SystemTime};
 
 use crate::{
-    lexer::Token, parser::{Expression, Statement}, resolver::ReferenceId, util::{
+    lexer::Token,
+    parser::{Expression, Statement},
+    util::{
         AppendLocatedError, AppendLocatedErrorWithSignal, Locateable, Located, LocatedAt, Location,
         Signaling, SignalingResult,
-    }
+    },
 };
 
 use thiserror::Error as ThisError;
@@ -23,7 +25,7 @@ pub enum Error {
     #[error("In this ternary:\n{0}")]
     TernaryEvaluation(Box<Located<Error>>),
     #[error("Trying to read this variable:\n{0}")]
-    VariableResolution(Box<Error>),
+    VariableResolution(Box<Located<Error>>),
 
     #[error("In this var statement:\n{0}")]
     VarEvaluation(Box<Located<Error>>),
@@ -107,6 +109,7 @@ pub enum FunctionImplementation {
 #[derive(Clone, Debug)]
 pub struct Function {
     arity: usize,
+    environment: Environment,
     implementation: FunctionImplementation,
 }
 
@@ -118,9 +121,20 @@ impl Function {
     ) -> ExpressionEvalResult {
         match &self.implementation {
             FunctionImplementation::Lox(parameters, body) => {
+                // substitute interpreter's scope with function's scope during execution
+                let prior_scope =
+                    std::mem::replace(&mut interpreter.environment, self.environment.clone());
+
+                // new scope for function body
+                interpreter.environment.push();
+
                 // register parameters as variables in the function body
-                for (name, value) in parameters.iter().map(|s| s.item.clone()).zip(args) {
-                    interpreter.environment.declare(name, value);
+                for (location, value) in parameters.iter().map(|s| s.location()).zip(args) {
+                    let path = interpreter
+                        .locals
+                        .get(&location)
+                        .expect("Locals should always contain information for function arguments");
+                    interpreter.environment.declare(path.index, value);
                 }
 
                 // eval function and expect a return value
@@ -139,7 +153,7 @@ impl Function {
                     .expect("Will always have just pushed a scope");
 
                 // return interpreter's scope back to prior state
-                let _ = std::mem::replace(&mut interpreter.environment, prior_scope);
+                interpreter.environment = prior_scope;
 
                 // return result
                 return_val
@@ -287,21 +301,17 @@ impl Default for Value {
 }
 
 mod environment {
-    use std::{
-        cell::RefCell,
-        collections::{hash_map::Entry, HashMap},
-        rc::Rc,
-    };
+    use std::{cell::RefCell, rc::Rc};
 
     use replace_with::replace_with_or_abort;
     use thiserror::Error as ThisError;
 
-    use super::Value;
+    use super::{Value, VariablePath};
 
     pub enum ValueThunk {
         Thunk {
             scope: Rc<RefCell<Scope>>,
-            ident: String,
+            index: usize,
         },
         Value(Value),
     }
@@ -309,8 +319,8 @@ mod environment {
     impl ValueThunk {
         pub fn into_owned(self) -> Value {
             match self {
-                ValueThunk::Thunk { scope, ident } => {
-                    scope.borrow().env.get(&ident).cloned().unwrap_or_default()
+                ValueThunk::Thunk { scope, index } => {
+                    scope.borrow().env.get(index).cloned().unwrap_or_default()
                 }
                 ValueThunk::Value(value) => value,
             }
@@ -341,16 +351,24 @@ mod environment {
         }
     }
 
+    impl AsThunk for Option<Value> {
+        type Output = Option<ValueThunk>;
+
+        fn as_thunk(self) -> Self::Output {
+            self.map(ValueThunk::Value)
+        }
+    }
+
     #[derive(Debug)]
     pub struct Scope {
-        env: HashMap<String, Value>,
+        env: Vec<Value>,
         parent: Option<Rc<RefCell<Scope>>>,
     }
 
     impl Scope {
         fn new() -> Self {
             Self {
-                env: HashMap::new(),
+                env: Vec::new(),
                 parent: None,
             }
         }
@@ -367,7 +385,7 @@ mod environment {
         pub fn push(&mut self) {
             replace_with_or_abort(&mut self.0, |scope| {
                 let new_scope = Scope {
-                    env: HashMap::new(),
+                    env: Vec::new(),
                     parent: Some(scope),
                 };
                 Rc::new(RefCell::new(new_scope))
@@ -382,21 +400,6 @@ mod environment {
             Ok(())
         }
 
-        pub fn get(&mut self, mut key: String) -> Result<Value, String> {
-            let mut scope = self.0.clone();
-            loop {
-                key = match scope.borrow_mut().env.entry(key) {
-                    Entry::Occupied(entry) => return Ok(entry.get().clone()),
-                    Entry::Vacant(vacant) => vacant.into_key(),
-                };
-                let parent = match &scope.borrow_mut().parent {
-                    None => return Err(key),
-                    Some(parent) => parent.clone(),
-                };
-                scope = parent;
-            }
-        }
-
         fn ancestor(&mut self, depth: usize) -> Option<Rc<RefCell<Scope>>> {
             let mut scope = self.0.clone();
             for _ in 0..depth {
@@ -409,63 +412,37 @@ mod environment {
             Some(scope)
         }
 
-        pub fn get_at(&mut self, key: String, depth: usize) -> Result<Value, String> {
-            let Some(scope) = self.ancestor(depth) else {
-                return Err(key);
+        pub fn get_at(&mut self, path: &VariablePath) -> Option<ValueThunk> {
+            let Some(scope) = self.ancestor(path.depth) else {
+                return None;
             };
-            let result = match scope.borrow_mut().env.entry(key) {
-                Entry::Occupied(entry) => Ok(entry.get().clone()),
-                Entry::Vacant(vacant) => Err(vacant.into_key()),
-            };
-            result
+            Some(ValueThunk::Thunk {
+                scope: scope.clone(),
+                index: path.index,
+            })
         }
 
-        pub fn declare(&mut self, key: String, value: Value) {
+        pub fn declare(&mut self, index: usize, value: Value) {
             let mut scope = self.0.borrow_mut();
-            scope.env.insert(key, value);
-        }
-
-        pub fn assign(&mut self, mut key: String, value: Value) -> Result<ValueThunk, String> {
-            let mut scope = self.0.clone();
-            loop {
-                key = match scope.borrow_mut().env.entry(key.clone()) {
-                    Entry::Occupied(mut entry) => {
-                        entry.insert(value);
-                        return Ok(ValueThunk::Thunk {
-                            scope: scope.clone(),
-                            ident: key,
-                        }); // new ver. of optimization (may actually be slower)
-                    }
-                    Entry::Vacant(vacant) => vacant.into_key(),
-                };
-                let parent = match &scope.borrow_mut().parent {
-                    None => return Err(key),
-                    Some(parent) => parent.clone(),
-                };
-                scope = parent;
+            while scope.env.len() <= index {
+                scope.env.push(Value::Nil);
             }
+            scope.env[index] = value;
         }
 
-        pub fn assign_at(
-            &mut self,
-            key: String,
-            value: Value,
-            depth: usize,
-        ) -> Result<ValueThunk, String> {
-            let Some(scope) = self.ancestor(depth) else {
-                return Err(key);
+        pub fn assign_at(&mut self, path: &VariablePath, value: Value) -> Option<ValueThunk> {
+            let Some(scope) = self.ancestor(path.depth) else {
+                return None;
             };
-            let result = match scope.borrow_mut().env.entry(key.clone()) {
-                Entry::Occupied(mut entry) => {
-                    entry.insert(value);
-                    Ok(ValueThunk::Thunk {
-                        scope: scope.clone(),
-                        ident: key,
-                    }) // new ver. of optimization (may actually be slower)
-                }
-                Entry::Vacant(vacant) => Err(vacant.into_key()),
-            };
-            result
+            let mut scope_borrow = scope.borrow_mut();
+            while scope_borrow.env.len() < path.index {
+                scope_borrow.env.push(Value::Nil);
+            }
+            scope_borrow.env[path.index] = value;
+            Some(ValueThunk::Thunk {
+                scope: scope.clone(),
+                index: path.index,
+            })
         }
     }
 
@@ -479,29 +456,29 @@ type StatementEvalResult = Result<(), EvalError>;
 type ExpressionEvalResult = Result<Value, EvalError>;
 type ExpressionEvalResultThunk = Result<ValueThunk, EvalError>;
 
+pub struct VariablePath {
+    depth: usize,
+    index: usize,
+}
+
 pub struct Interpreter {
-    // environment: Environment,
-    // globals: Environment,
-    // locals: HashMap<Location, usize>,
+    environment: Environment,
     globals: HashMap<String, Value>,
-    locals: Vec<Value>,
-    visited_ids: HashSet<ReferenceId>,
-    location_ids: HashMap<Location, usize>,
+    locals: HashMap<Location, VariablePath>,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
-        let globals = Environment::new();
         let mut this = Self {
+            environment: Environment::new(),
             globals: HashMap::new(),
-            locals: Vec::new(),
-            visited_ids: HashSet::new(),
-            location_ids: HashMap::new(),
+            locals: HashMap::new(),
         };
         this.globals.insert(
             "clock".into(),
             Value::Function(Function {
                 arity: 0,
+                environment: this.environment.clone(),
                 implementation: FunctionImplementation::Clock,
             }),
         ); // insert clock native function into global scope
@@ -561,7 +538,7 @@ impl Interpreter {
                 self.evaluate(expression)
                     .with_maybe_signaled_err_at(Error::ExpressionStatementEvaluation, location)?;
             }
-            Statement::Var(name, maybe_initializer) => {
+            Statement::Var(_, maybe_initializer) => {
                 let value = match maybe_initializer {
                     Some(expression) => self
                         .evaluate(expression)
@@ -569,7 +546,7 @@ impl Interpreter {
                         .into_owned(), // own must occur in order to store the value
                     None => Value::Uninitialized,
                 };
-                self.environment.declare(name.to_owned(), value);
+                self.declaration(location, value)?;
             }
             Statement::Block(statements) => {
                 self.environment.push();
@@ -581,9 +558,9 @@ impl Interpreter {
                     .expect("Will always have just pushed a scope");
                 result?;
             }
-            Statement::Function(name, parameters, body) => {
+            Statement::Function(_, parameters, body) => {
                 let function = self.function_declaration(parameters.clone(), body.clone())?;
-                self.environment.declare(name.item.clone(), function);
+                self.declaration(location, function)?;
             }
         }
         Ok(())
@@ -641,8 +618,7 @@ impl Interpreter {
                 .as_thunk(),
             Expression::Variable(name) => self
                 .variable(name.to_owned(), location)
-                .with_err_at(Error::VariableResolution, location)
-                .map_err(MaybeWithSignal::NoSignal)
+                .with_maybe_signaled_err_at(Error::VariableResolution, location)
                 .as_thunk(),
             Expression::Assignment(name, sub_expression) => self
                 .assignment(name.clone(), sub_expression) // clone is necessary, because variable reassignment may occur
@@ -684,20 +660,21 @@ impl Interpreter {
         literal.item.clone().try_into() // must clone the literal to resolve its value
     }
 
-    fn variable(&mut self, name: String, location: &Location) -> Result<Value, Error> {
+    fn variable(&mut self, name: String, location: &Location) -> ExpressionEvalResult {
         let key = name.clone();
-        let depth = self.locals.get(&location);
-        match if let Some(&depth) = depth {
-            self.environment.get_at(name, depth)
+        let value = if let Some(path) = self.locals.get(&location) {
+            self.environment.get_at(path)
         } else {
-            self.globals.get(name)
-        } {
-            Ok(value) => match value {
-                Value::Uninitialized => Err(Error::UninitializedVariable(key)),
-                _ => Ok(value),
-            },
-            Err(key) => Err(Error::UndeclaredVariable(key)),
+            self.globals.get(&name).cloned().as_thunk()
+        };
+        let Some(value) = value else {
+            return Err(Error::UndeclaredVariable(name).at(location).no_signal());
+        };
+        let value = value.into_owned();
+        if let Value::Uninitialized = value {
+            return Err(Error::UninitializedVariable(key).at(location).no_signal());
         }
+        return Ok(value);
     }
 
     fn assignment(
@@ -706,15 +683,25 @@ impl Interpreter {
         expression: &Located<Expression>,
     ) -> ExpressionEvalResultThunk {
         let (name, location) = name.split();
-        let value = self.evaluate(expression)?.into_owned(); // own must occur in order to store the value
-        match if let Some(depth) = self.locals.get(&location) {
-            self.environment.assign_at(name, value, *depth)
+        let value = self.evaluate(expression)?.into_owned();
+        let value = if let Some(path) = self.locals.get(&location) {
+            self.environment.assign_at(path, value)
         } else {
-            self.globals.assign(name, value)
-        } {
-            Err(key) => Err(Error::UndeclaredVariable(key).at(&location).no_signal()),
-            Ok(value) => Ok(value),
-        }
+            self.globals.get(&name).cloned().as_thunk()
+        };
+        let Some(value) = value else {
+            return Err(Error::UndeclaredVariable(name).at(&location).no_signal());
+        };
+        return Ok(value);
+    }
+
+    fn declaration(&mut self, location: &Location, value: Value) -> StatementEvalResult {
+        let path = self
+            .locals
+            .get(&location)
+            .expect("This declaration was not registered while running the resolver");
+        self.environment.declare(path.index, value);
+        Ok(())
     }
 
     fn unary(
@@ -883,28 +870,28 @@ impl Interpreter {
         }
     }
 
-    pub fn resolve(&mut self, location: Location, id: ReferenceId) {
-        self.locals.insert(location, i);
+    pub fn resolve(&mut self, location: Location, depth: usize, index: usize) {
+        self.locals.insert(location, VariablePath { depth, index });
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Environment, Value};
+// #[cfg(test)]
+// mod tests {
+//     use super::{Environment, Value};
 
-    #[test]
-    fn test() {
-        let mut env = Environment::new();
-        env.declare("x".to_string(), Value::Number(5.0));
-        env.declare("y".to_string(), Value::Number(10.0));
-        env.push();
-        let _ = env.assign("x".to_string(), Value::Number(40.0));
-        env.declare("z".to_string(), Value::Number(607.0));
-        dbg!(&env);
-        env.declare("x".to_string(), Value::Number(900.0));
-        dbg!(&env);
-        env.pop().unwrap();
-        let _ = env.assign("x".to_string(), Value::Number(18.0));
-        dbg!(&env);
-    }
-}
+//     #[test]
+//     fn test() {
+//         let mut env = Environment::new();
+//         env.declare("x".to_string(), Value::Number(5.0));
+//         env.declare("y".to_string(), Value::Number(10.0));
+//         env.push();
+//         let _ = env.assign("x".to_string(), Value::Number(40.0));
+//         env.declare("z".to_string(), Value::Number(607.0));
+//         dbg!(&env);
+//         env.declare("x".to_string(), Value::Number(900.0));
+//         dbg!(&env);
+//         env.pop().unwrap();
+//         let _ = env.assign("x".to_string(), Value::Number(18.0));
+//         dbg!(&env);
+//     }
+// }
