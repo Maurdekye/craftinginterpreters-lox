@@ -114,7 +114,7 @@ impl<'a> Resolver<'a> {
                     }
                     self.set_value(name.clone(), VarState::Defined.at(&location));
                 }
-                Statement::Class(name, methods) => {
+                Statement::Class(name, methods, class_methods) => {
                     let enclosing_class = std::mem::replace(&mut self.class_type, ClassType::Class);
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
                     self.scopes.push(HashMap::new());
@@ -127,6 +127,11 @@ impl<'a> Resolver<'a> {
                                 FunctionType::Method
                             };
                             self.function(parameters, body, function_type)?;
+                        }
+                    }
+                    for method in class_methods.iter() {
+                        if let Statement::Function(_, parameters, body) = &method.item {
+                            self.function(parameters, body, FunctionType::Function)?;
                         }
                     }
                     self.pop_scope()?;

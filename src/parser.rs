@@ -164,7 +164,7 @@ impl Display for Expression {
 
 #[derive(Clone, Debug)]
 pub enum Statement {
-    Class(String, Vec<Located<Statement>>),
+    Class(String, Vec<Located<Statement>>, Vec<Located<Statement>>),
     Function(String, Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
     Print(Located<Expression>),
     Expression(Located<Expression>),
@@ -184,9 +184,9 @@ pub enum Statement {
 impl Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Statement::Class(name, functions) => {
+            Statement::Class(name, functions, class_methods) => {
                 writeln!(f, "(class {}", name)?;
-                for function in functions.iter() {
+                for function in functions.iter().chain(class_methods.iter()) {
                     writeln!(f, "{}", function.indented(2))?;
                 }
                 writeln!(f, ")")
@@ -484,6 +484,7 @@ where
         let name = self.consume_identifier(|_| Error::MissingClassName)?.item;
         consume_token!(self, LeftBrace)?;
         let mut methods = Vec::new();
+        let mut class_methods = Vec::new();
         let mut errors = Errors::new();
         loop {
             split_ref_some_errors!(self.tokens.peek() => |token, location| {
@@ -498,6 +499,16 @@ where
                         );
                         break;
                     }
+                    Token::Class => {
+                        self.tokens.next();
+                        match self.method(location) {
+                            Ok(function) => class_methods.push(function.into()),
+                            Err(err) => {
+                                errors.push(err);
+                                self.synchronize();
+                            }
+                        }
+                    }
                     _ => {
                         match self.method(location) {
                             Ok(function) => methods.push(function.into()),
@@ -510,7 +521,7 @@ where
                 }
             });
         }
-        errors.empty_ok(Statement::Class(name, methods).at(location))
+        errors.empty_ok(Statement::Class(name, methods, class_methods).at(location))
     }
 
     fn statement(&mut self) -> StatementParseResult {

@@ -287,4 +287,19 @@ print foo.init();
         .to_string())
         .is_ok())
     }
+
+    #[test]
+    fn class_method() {
+        assert!(run(r#"
+class Math {
+    class square(n) {
+        return n * n;
+    }
+}
+
+print Math.square(3);
+"#
+        .to_string())
+        .is_ok())
+    }
 }

@@ -206,6 +206,7 @@ impl Display for FunctionImplementation {
 pub struct Class {
     name: String,
     methods: HashMap<String, Value>,
+    class_methods: HashMap<String, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -702,9 +703,9 @@ impl Interpreter {
                     self.function_declaration(parameters.clone(), body.clone(), false)?;
                 self.environment.declare(name.clone(), function);
             }
-            Statement::Class(name, methods) => {
+            Statement::Class(name, methods, class_methods) => {
                 self.environment.declare(name.clone(), Value::Nil);
-                let class = self.class_declaration(name.clone(), methods)?;
+                let class = self.class_declaration(name.clone(), methods, class_methods)?;
                 self.environment
                     .assign(name.clone(), class)
                     .expect("We just declared the variable in the current scope");
@@ -820,17 +821,29 @@ impl Interpreter {
     fn class_declaration(
         &mut self,
         name: String,
-        functions: &Vec<Located<Statement>>,
+        method_definitions: &Vec<Located<Statement>>,
+        class_method_definitions: &Vec<Located<Statement>>,
     ) -> ExpressionEvalResult {
         let mut methods = HashMap::new();
-        for method in functions {
+        let mut class_methods = HashMap::new();
+        for method in method_definitions {
             if let Statement::Function(name, parameters, body) = &method.item {
                 let method =
                     self.function_declaration(parameters.clone(), body.clone(), name == "init")?;
                 methods.insert(name.clone(), method);
             }
         }
-        Ok(Value::Class(Rc::new(Class { name, methods })))
+        for method in class_method_definitions {
+            if let Statement::Function(name, parameters, body) = &method.item {
+                let method = self.function_declaration(parameters.clone(), body.clone(), false)?;
+                class_methods.insert(name.clone(), method);
+            }
+        }
+        Ok(Value::Class(Rc::new(Class {
+            name,
+            methods,
+            class_methods,
+        })))
     }
 
     fn literal(&mut self, literal: &Located<Token>) -> Result<Value, Token> {
@@ -1045,11 +1058,21 @@ impl Interpreter {
         sub_expression: &Located<Expression>,
         field: &Located<String>,
     ) -> ExpressionEvalResult {
-        let Value::Instance(instance) = self.evaluate(sub_expression)?.into_owned() else {
-            return Err(Error::GetOnNonObject.at(&field.location()).no_signal());
-        };
-        let value = instance.get(&field)?;
-        Ok(value)
+        match self.evaluate(sub_expression)?.into_owned() {
+            Value::Instance(instance) => {
+                let value = instance.get(&field)?;
+                Ok(value)
+            }
+            Value::Class(class) => {
+                let Some(method) = class.class_methods.get(&field.item).cloned() else {
+                    return Err(Error::InvalidFieldAccess(field.item.clone())
+                        .at(&field.location())
+                        .no_signal());
+                };
+                Ok(method)
+            }
+            _ => Err(Error::GetOnNonObject.at(&field.location()).no_signal()),
+        }
     }
 
     pub fn set_expression(
