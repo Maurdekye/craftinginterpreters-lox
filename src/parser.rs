@@ -83,27 +83,42 @@ pub enum Error {
 pub enum Expression {
     Literal(Located<Token>),
     Variable(String),
-    Assignment(Located<String>, Box<Located<Expression>>),
+    Assignment {
+        variable_name: Located<String>,
+        expression: Box<Located<Expression>>,
+    },
     Grouping(Box<Located<Expression>>),
-    Unary(Located<Token>, Box<Located<Expression>>),
-    Binary(
-        Located<Token>,
-        Box<Located<Expression>>,
-        Box<Located<Expression>>,
-    ),
-    Ternary(
-        Box<Located<Expression>>,
-        Box<Located<Expression>>,
-        Box<Located<Expression>>,
-    ),
-    Call(Box<Located<Expression>>, Vec<Located<Expression>>),
-    Get(Box<Located<Expression>>, Located<String>),
-    Set(
-        Box<Located<Expression>>,
-        Located<String>,
-        Box<Located<Expression>>,
-    ),
-    Lambda(Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
+    Unary {
+        operator: Located<Token>,
+        expression: Box<Located<Expression>>,
+    },
+    Binary {
+        operator: Located<Token>,
+        lhs_expression: Box<Located<Expression>>,
+        rhs_expression: Box<Located<Expression>>,
+    },
+    Ternary {
+        condition: Box<Located<Expression>>,
+        true_expression: Box<Located<Expression>>,
+        false_expression: Box<Located<Expression>>,
+    },
+    Call {
+        callee: Box<Located<Expression>>,
+        arguments: Vec<Located<Expression>>,
+    },
+    Get {
+        object: Box<Located<Expression>>,
+        field: Located<String>,
+    },
+    Set {
+        object: Box<Located<Expression>>,
+        field: Located<String>,
+        value_expression: Box<Located<Expression>>,
+    },
+    Lambda {
+        parameters: Rc<Vec<Located<String>>>,
+        body: Rc<Located<Statement>>,
+    },
     This,
 }
 
@@ -112,45 +127,65 @@ impl Display for Expression {
         match self {
             Expression::Literal(Located { item: token, .. }) => write!(f, "{token}"),
             Expression::Variable(name) => write!(f, "(ref {name})"),
-            Expression::Assignment(name, expr) => write!(f, "(var {name} {expr})"),
+            Expression::Assignment {
+                variable_name,
+                expression,
+            } => write!(f, "(var {variable_name} {expression})"),
             Expression::Grouping(expr) => write!(f, "(group {})", expr.item),
-            Expression::Unary(Located { item: token, .. }, expr) => write!(f, "({token} {expr})"),
-            Expression::Binary(Located { item: token, .. }, lhs, rhs) => {
-                write!(f, "({token} {lhs} {rhs})")
+            Expression::Unary {
+                operator,
+                expression,
+            } => write!(f, "({} {expression})", operator.item),
+            Expression::Binary {
+                operator,
+                lhs_expression,
+                rhs_expression,
+            } => {
+                write!(f, "({} {lhs_expression} {rhs_expression})", operator.item)
             }
-            Expression::Ternary(condition, true_expr, false_expr) => {
+            Expression::Ternary {
+                condition,
+                true_expression,
+                false_expression,
+            } => {
                 write!(
                     f,
                     "(? {} {} {})",
-                    condition.item, true_expr.item, false_expr.item
+                    condition.item, true_expression.item, false_expression.item
                 )
             }
-            Expression::Call(callee, args) => {
+            Expression::Call { callee, arguments } => {
                 write!(
                     f,
                     "({} {})",
                     callee.item,
-                    args.iter()
+                    arguments
+                        .iter()
                         .map(|a| format!("{a}"))
                         .collect::<Vec<_>>()
                         .join(" ")
                 )
             }
-            Expression::Get(subexpr, field) => {
-                write!(f, "(get {} {})", subexpr.item, field.item)
+            Expression::Get { object, field } => {
+                write!(f, "(get {} {})", object.item, field.item)
             }
-            Expression::Set(instance_expr, field, value_expr) => {
+            Expression::Set {
+                object,
+                field,
+                value_expression,
+            } => {
                 write!(
                     f,
                     "(set {} {} {})",
-                    instance_expr.item, field.item, value_expr.item
+                    object.item, field.item, value_expression.item
                 )
             }
-            Expression::Lambda(args, body) => {
+            Expression::Lambda { parameters, body } => {
                 write!(
                     f,
                     "(lambda ({}) {})",
-                    args.iter()
+                    parameters
+                        .iter()
                         .map(|a| a.item.clone())
                         .collect::<Vec<_>>()
                         .join(" "),
@@ -164,22 +199,32 @@ impl Display for Expression {
 
 #[derive(Clone, Debug)]
 pub enum Statement {
-    Class(String, Vec<Located<Statement>>, Vec<Located<Statement>>),
-    Function(
-        String,
-        Option<Rc<Vec<Located<String>>>>,
-        Rc<Located<Statement>>,
-    ),
+    Class {
+        name: String,
+        methods: Vec<Located<Statement>>,
+        class_methods: Vec<Located<Statement>>,
+    },
+    Function {
+        name: String,
+        parameters: Option<Rc<Vec<Located<String>>>>,
+        body: Rc<Located<Statement>>,
+    },
     Print(Located<Expression>),
     Expression(Located<Expression>),
-    Var(String, Option<Located<Expression>>),
+    Var {
+        name: String,
+        initializer: Option<Located<Expression>>,
+    },
     Block(Vec<Located<Statement>>),
-    If(
-        Located<Expression>,
-        Box<Located<Statement>>,
-        Box<Option<Located<Statement>>>,
-    ),
-    While(Located<Expression>, Box<Located<Statement>>),
+    If {
+        condition: Located<Expression>,
+        true_branch: Box<Located<Statement>>,
+        false_branch: Box<Option<Located<Statement>>>,
+    },
+    While {
+        condition: Located<Expression>,
+        body: Box<Located<Statement>>,
+    },
     Break,
     Continue,
     Return(Option<Located<Expression>>),
@@ -188,33 +233,49 @@ pub enum Statement {
 impl Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Statement::Class(name, methods, class_methods) => {
+            Statement::Class {
+                name,
+                methods,
+                class_methods,
+            } => {
                 writeln!(f, "(class {}", name)?;
                 for function in methods.iter().chain(class_methods) {
                     writeln!(f, "{}", function.indented(2))?;
                 }
                 writeln!(f, ")")
             }
-            Statement::Function(name, args, body) => {
+            Statement::Function {
+                name,
+                parameters,
+                body,
+            } => {
                 writeln!(
                     f,
                     "(fun {} ({}) {})",
                     name,
-                    args.as_ref().map(|a| a
-                        .iter()
-                        .map(|a| a.item.clone())
-                        .collect::<Vec<_>>()
-                        .join(" "))
+                    parameters
+                        .as_ref()
+                        .map(|a| a
+                            .iter()
+                            .map(|a| a.item.clone())
+                            .collect::<Vec<_>>()
+                            .join(" "))
                         .unwrap_or(String::new()),
                     body.item
                 )
             }
             Statement::Print(expression) => writeln!(f, "(print {})", expression.item),
             Statement::Expression(expression) => writeln!(f, "{}", expression.item),
-            Statement::Var(name, None) => {
+            Statement::Var {
+                name,
+                initializer: None,
+            } => {
                 writeln!(f, "(var {})", name)
             }
-            Statement::Var(name, Some(expression)) => {
+            Statement::Var {
+                name,
+                initializer: Some(expression),
+            } => {
                 writeln!(f, "(var {} {})", name, expression.item)
             }
             Statement::Block(statements) => {
@@ -224,7 +285,11 @@ impl Display for Statement {
                 }
                 writeln!(f, ")")
             }
-            Statement::If(condition, true_branch, false_branch) => {
+            Statement::If {
+                condition,
+                true_branch,
+                false_branch,
+            } => {
                 writeln!(f, "(if {condition}")?;
                 write!(f, "{}", true_branch.indented(2))?;
                 if let Some(false_branch) = false_branch.as_ref() {
@@ -232,7 +297,7 @@ impl Display for Statement {
                 }
                 writeln!(f, ")")
             }
-            Statement::While(condition, body) => {
+            Statement::While { condition, body } => {
                 writeln!(f, "(while {condition}")?;
                 write!(f, "{}", body.indented(2))?;
                 writeln!(f, ")")
@@ -431,11 +496,11 @@ where
 
         split_some!(self.tokens.next() => |token, location| {
             match token {
-                Token::Semicolon => Ok(Statement::Var(name, None).at(&location)),
+                Token::Semicolon => Ok(Statement::Var { name, initializer: None }.at(&location)),
                 Token::Equal => {
                     let var_expr = self.expression()?;
                     self.consume_semicolon()?;
-                    Ok(Statement::Var(name, Some(var_expr)).at(&location))
+                    Ok(Statement::Var { name, initializer: Some(var_expr) }.at(&location))
                 }
                 other => Err(Error::UnexpectedToken(other).located_at(&location)),
             }
@@ -484,12 +549,15 @@ where
             match token {
                 Token::LeftParen => {
                     let parameters = self.function_parameters()?;
+                    let parameters = Some(parameters.into());
                     let body = self.statement()?;
-                    Ok(Statement::Function(name, Some(parameters.into()), body.into()).at(location))
+                    let body = body.into();
+                    Ok(Statement::Function { name, parameters, body } .at(location))
                 }
                 _ if allow_getter => {
                     let body = self.statement()?;
-                    Ok(Statement::Function(name, None, body.into()).at(location))
+                    let body = body.into();
+                    Ok(Statement::Function { name, parameters: None, body }.at(location))
                 }
                 token => Err(Error::UnexpectedToken(token.clone()).located_at(params_location))
             }
@@ -538,7 +606,14 @@ where
                 }
             });
         }
-        errors.empty_ok(Statement::Class(name, methods, class_methods).at(location))
+        errors.empty_ok(
+            Statement::Class {
+                name,
+                methods,
+                class_methods,
+            }
+            .at(location),
+        )
     }
 
     fn statement(&mut self) -> StatementParseResult {
@@ -585,20 +660,27 @@ where
     fn if_statement(&mut self, location: &impl Locateable) -> StatementParseResult {
         self.tokens.next();
         let condition = self.expression()?;
-        let true_branch = self.statement()?;
-        let false_branch = if let Some(_) = self.tokens.next_if(|t| matches!(t.item, Token::Else)) {
-            Some(self.statement()?)
-        } else {
-            None
-        };
-        Ok(Statement::If(condition, true_branch.into(), false_branch.into()).at(location))
+        let true_branch = self.statement()?.into();
+        let false_branch =
+            if let Some(_) = self.tokens.next_if(|t| matches!(t.item, Token::Else)) {
+                Some(self.statement()?)
+            } else {
+                None
+            }
+            .into();
+        Ok(Statement::If {
+            condition,
+            true_branch,
+            false_branch,
+        }
+        .at(location))
     }
 
     fn while_statement(&mut self, location: &impl Locateable) -> StatementParseResult {
         self.tokens.next();
         let condition = self.expression()?;
-        let body = self.statement()?;
-        Ok(Statement::While(condition, body.into()).at(location))
+        let body = self.statement()?.into();
+        Ok(Statement::While { condition, body }.at(location))
     }
 
     fn for_statement(&mut self, location: &impl Locateable) -> StatementParseResult {
@@ -649,9 +731,10 @@ where
             ])
             .at(location);
         }
+        let body = body.into();
         let condition =
             condition.unwrap_or(Expression::Literal(Token::True.at(location)).at(location));
-        let mut loop_body = Statement::While(condition, Box::new(body)).at(location);
+        let mut loop_body = Statement::While { condition, body }.at(location);
         if let Some(initializer) = initializer {
             loop_body = Statement::Block(vec![initializer, loop_body]).at(location);
         }
@@ -713,9 +796,9 @@ where
 
     fn lambda(&mut self, location: &impl Locateable) -> ExpressionParseResult {
         self.tokens.next();
-        let parameters = self.function_parameters()?;
-        let body = self.statement()?;
-        Ok(Expression::Lambda(parameters.into(), body.into()).at(location))
+        let parameters = self.function_parameters()?.into();
+        let body = self.statement()?.into();
+        Ok(Expression::Lambda { parameters, body }.at(location))
     }
 
     fn assignment(&mut self) -> ExpressionParseResult {
@@ -741,16 +824,23 @@ where
     fn assignment_expression(&mut self, expression: Located<Expression>) -> ExpressionParseResult {
         let (expression, ident_location) = expression.split();
         match expression {
-            Expression::Variable(name) => {
-                let rhs_expression = self.assignment()?;
-                Ok(
-                    Expression::Assignment(name.at(&ident_location), rhs_expression.into())
-                        .at(&ident_location),
-                )
+            Expression::Variable(variable_name) => {
+                let variable_name = variable_name.at(&ident_location);
+                let expression = self.assignment()?.into();
+                Ok(Expression::Assignment {
+                    variable_name,
+                    expression,
+                }
+                .at(&ident_location))
             }
-            Expression::Get(sub_expr, field) => {
-                let rhs_expression = self.assignment()?;
-                Ok(Expression::Set(sub_expr, field, rhs_expression.into()).at(&ident_location))
+            Expression::Get { object, field } => {
+                let value_expression = self.assignment()?.into();
+                Ok(Expression::Set {
+                    object,
+                    field,
+                    value_expression,
+                }
+                .at(&ident_location))
             }
             _ => Err(Error::InvalidAssignmentTarget(expression).located_at(&ident_location)),
         }
@@ -776,15 +866,18 @@ where
         Ok(expression)
     }
 
-    fn ternary_body(&mut self, expression: Located<Expression>) -> ExpressionParseResult {
-        let true_expr = self.binary()?;
+    fn ternary_body(&mut self, condition: Located<Expression>) -> ExpressionParseResult {
+        let true_expression = self.binary()?.into();
         consume_token!(self, Colon)?;
-        let false_expr = self.binary()?;
-        let location = expression.location();
-        Ok(
-            Expression::Ternary(expression.into(), true_expr.into(), false_expr.into())
-                .at(&location),
-        )
+        let false_expression = self.binary()?.into();
+        let location = condition.location();
+        let condition = condition.into();
+        Ok(Expression::Ternary {
+            condition,
+            true_expression,
+            false_expression,
+        }
+        .at(&location))
     }
 
     fn binary_parse<F>(
@@ -805,11 +898,17 @@ where
         }
         let mut expression = sub_parser(self)?;
         while let Some(operator) = self.tokens.next_if(|token| operator_pred(&token.item)) {
-            let rhs_expression =
-                sub_parser(self).with_err_located_at(Error::BinaryParse, &operator)?;
+            let rhs_expression = sub_parser(self)
+                .with_err_located_at(Error::BinaryParse, &operator)?
+                .into();
             let location = expression.location();
-            expression = Expression::Binary(operator, expression.into(), rhs_expression.into())
-                .at(&location);
+            let lhs_expression = expression.into();
+            expression = Expression::Binary {
+                operator,
+                lhs_expression,
+                rhs_expression,
+            }
+            .at(&location);
         }
         Ok(expression)
     }
@@ -860,34 +959,39 @@ where
             .next_if(|token| matches!(token.item, Token::Bang | Token::Minus))
         {
             let location = operator.location();
-            let rhs = self
+            let expression = self
                 .call()
-                .with_err_located_at(Error::UnaryParse, &location)?;
-            Ok(Expression::Unary(operator, rhs.into()).at(&location))
+                .with_err_located_at(Error::UnaryParse, &location)?
+                .into();
+            Ok(Expression::Unary {
+                operator,
+                expression,
+            }
+            .at(&location))
         } else {
             self.call()
         }
     }
 
     fn call(&mut self) -> ExpressionParseResult {
-        let mut expr = self.primary()?;
+        let mut expression = self.primary()?;
         loop {
             split_ref_some!(self.tokens.peek() => |token, location| {
                 match token {
                     Token::LeftParen => {
                         self.tokens.next();
-                        let mut args = Vec::new();
+                        let mut arguments = Vec::new();
                         if self
                             .tokens
                             .next_if(|t| matches!(t.item, Token::RightParen))
                             .is_none()
                         {
                             loop {
-                                args.push(self.expression()?);
+                                arguments.push(self.expression()?);
                                 split_some!(self.tokens.next() => |token, location| {
                                     match token {
                                         Token::Comma => {
-                                            if args.len() >= 255 {
+                                            if arguments.len() >= 255 {
                                                 return Err(Error::TooManyArguments.located_at(&location))
                                             }
                                         },
@@ -899,19 +1003,21 @@ where
                                 });
                             }
                         }
-                        expr = Expression::Call(Box::new(expr), args).at(location);
+                        let callee = expression.into();
+                        expression = Expression::Call { callee, arguments }.at(location);
                     }
                     Token::Dot => {
                         self.tokens.next();
                         let field = self.consume_identifier(|_| Error::MissingIdentifierInGet)?;
-                        let expr_location = expr.location();
-                        expr = Expression::Get(expr.into(), field).at(&expr_location)
+                        let expr_location = expression.location();
+                        let object = expression.into();
+                        expression = Expression::Get { object, field }.at(&expr_location)
                     }
                     _ => break
                 }
             });
         }
-        Ok(expr)
+        Ok(expression)
     }
 
     fn primary(&mut self) -> ExpressionParseResult {

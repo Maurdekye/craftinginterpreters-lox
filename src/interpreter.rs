@@ -664,11 +664,15 @@ impl Interpreter {
                     .at(location)
                     .signaling(Signal::Return(return_value)));
             }
-            Statement::If(condition, true_branch, false_branch) => {
+            Statement::If {
+                condition,
+                true_branch,
+                false_branch,
+            } => {
                 self.if_statement(condition, true_branch.as_ref(), false_branch.as_ref())
                     .with_maybe_signaled_err_at(Error::IfEvaluation, location)?;
             }
-            Statement::While(condition, body) => {
+            Statement::While { condition, body } => {
                 self.while_statement(condition, body.as_ref())
                     .with_maybe_signaled_err_at(Error::WhileEvaluation, location)?;
             }
@@ -685,8 +689,8 @@ impl Interpreter {
                 self.evaluate(expression)
                     .with_maybe_signaled_err_at(Error::ExpressionStatementEvaluation, location)?;
             }
-            Statement::Var(name, maybe_initializer) => {
-                let value = match maybe_initializer {
+            Statement::Var { name, initializer } => {
+                let value = match initializer {
                     Some(expression) => self
                         .evaluate(expression)
                         .with_maybe_signaled_err_at(Error::VarEvaluation, location)?
@@ -705,12 +709,20 @@ impl Interpreter {
                     .expect("Will always have just pushed a scope");
                 result?;
             }
-            Statement::Function(name, parameters, body) => {
+            Statement::Function {
+                name,
+                parameters,
+                body,
+            } => {
                 let function =
                     self.function_declaration(parameters.clone(), body.clone(), false)?;
                 self.environment.declare(name.clone(), function);
             }
-            Statement::Class(name, methods, class_methods) => {
+            Statement::Class {
+                name,
+                methods,
+                class_methods,
+            } => {
                 self.environment.declare(name.clone(), Value::Nil);
                 let class = self.class_declaration(name.clone(), methods, class_methods)?;
                 self.environment
@@ -776,32 +788,48 @@ impl Interpreter {
                 .with_err_at(Error::VariableResolution, location)
                 .map_err(MaybeWithSignal::NoSignal)
                 .as_thunk(),
-            Expression::Assignment(name, sub_expression) => self
-                .assignment(name.clone(), sub_expression) // clone is necessary, because variable reassignment may occur
+            Expression::Assignment {
+                variable_name,
+                expression,
+            } => self
+                .assignment(variable_name.clone(), expression) // clone is necessary, because variable reassignment may occur
                 .with_maybe_signaled_err_at(Error::AssignmentEvaluation, location),
             Expression::Grouping(sub_expression) => self.evaluate(sub_expression),
-            Expression::Unary(unary_operator, unary_expr) => self
-                .unary(unary_operator, unary_expr)
+            Expression::Unary {
+                operator,
+                expression,
+            } => self
+                .unary(operator, expression)
                 .with_maybe_signaled_err_at(Error::UnaryEvaluation, location)
                 .as_thunk(),
-            Expression::Binary(binary_operator, lhs_expr, rhs_expr) => self
-                .binary(binary_operator, lhs_expr, rhs_expr)
+            Expression::Binary {
+                operator,
+                lhs_expression,
+                rhs_expression,
+            } => self
+                .binary(operator, lhs_expression, rhs_expression)
                 .with_maybe_signaled_err_at(Error::BinaryEvaluation, location),
-            Expression::Ternary(condition_expr, true_branch_expr, false_branch_expr) => self
-                .ternary(condition_expr, true_branch_expr, false_branch_expr)
+            Expression::Ternary {
+                condition,
+                true_expression,
+                false_expression,
+            } => self
+                .ternary(condition, true_expression, false_expression)
                 .with_maybe_signaled_err_at(Error::TernaryEvaluation, location),
-            Expression::Call(function, arguments) => self
-                .call(function.as_ref(), &arguments[..])
+            Expression::Call { callee, arguments } => self
+                .call(callee.as_ref(), &arguments[..])
                 .with_maybe_signaled_err_at(Error::FunctionCall, location)
                 .as_thunk(),
-            Expression::Lambda(parameters, body) => self
+            Expression::Lambda { parameters, body } => self
                 .function_declaration(Some(parameters.clone()), body.clone(), false)
                 .as_thunk(),
-            Expression::Get(sub_expression, field) => {
-                self.get_expression(sub_expression, field).as_thunk()
-            }
-            Expression::Set(assignment_expression, field, value_expression) => self
-                .set_expression(assignment_expression, field, value_expression)
+            Expression::Get { object, field } => self.get_expression(object, field).as_thunk(),
+            Expression::Set {
+                object,
+                field,
+                value_expression,
+            } => self
+                .set_expression(object, field, value_expression)
                 .as_thunk(),
             Expression::This => self
                 .variable(String::from("this"), location)
@@ -835,14 +863,24 @@ impl Interpreter {
         let mut methods = HashMap::new();
         let mut class_methods = HashMap::new();
         for method in method_definitions {
-            if let Statement::Function(name, parameters, body) = &method.item {
+            if let Statement::Function {
+                name,
+                parameters,
+                body,
+            } = &method.item
+            {
                 let method =
                     self.function_declaration(parameters.clone(), body.clone(), name == "init")?;
                 methods.insert(name.clone(), method);
             }
         }
         for method in class_method_definitions {
-            if let Statement::Function(name, parameters, body) = &method.item {
+            if let Statement::Function {
+                name,
+                parameters,
+                body,
+            } = &method.item
+            {
                 let method = self.function_declaration(parameters.clone(), body.clone(), false)?;
                 class_methods.insert(name.clone(), method);
             }

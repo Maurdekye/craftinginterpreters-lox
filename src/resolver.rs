@@ -107,20 +107,20 @@ impl<'a> Resolver<'a> {
                 Statement::Block(statements) => {
                     self.resolve(statements)?;
                 }
-                Statement::Var(name, initializer) => {
+                Statement::Var { name, initializer } => {
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Declared)?;
                     if let Some(initializer) = initializer {
                         self.expression(initializer)?;
                     }
                     self.set_value(name.clone(), VarState::Defined.at(&location));
                 }
-                Statement::Class(name, methods, class_methods) => {
+                Statement::Class { name, methods, class_methods }=> {
                     let enclosing_class = std::mem::replace(&mut self.class_type, ClassType::Class);
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
                     self.scopes.push(HashMap::new());
                     self.set_value(String::from("this"), VarState::Defined.at(&location));
                     for method in methods.iter() {
-                        if let Statement::Function(name, parameters, body) = &method.item {
+                        if let Statement::Function { name, parameters, body } = &method.item {
                             let function_type = if name == "init" {
                                 FunctionType::Initializer
                             } else {
@@ -130,14 +130,14 @@ impl<'a> Resolver<'a> {
                         }
                     }
                     for method in class_methods.iter() {
-                        if let Statement::Function(_, parameters, body) = &method.item {
+                        if let Statement::Function { parameters, body, .. } = &method.item {
                             self.function(parameters.as_ref(), body, FunctionType::Function)?;
                         }
                     }
                     self.pop_scope()?;
                     self.class_type = enclosing_class;
                 }
-                Statement::Function(name, parameters, body) => {
+                Statement::Function { name, parameters, body }=> {
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
                     self.function(parameters.as_ref(), body.as_ref(), FunctionType::Function)?;
                 }
@@ -145,14 +145,14 @@ impl<'a> Resolver<'a> {
                 | Statement::Print(expression) => {
                     self.expression(expression)?;
                 }
-                Statement::If(condition, true_branch, false_branch) => {
+                Statement::If { condition, true_branch, false_branch } => {
                     self.expression(condition)?;
                     self.statement(true_branch)?;
                     if let Some(false_branch) = false_branch.as_ref() {
                         self.statement(false_branch)?;
                     }
                 }
-                Statement::While(condition, body) => {
+                Statement::While { condition, body } => {
                     let enclosing_type = std::mem::replace(&mut self.loop_type, LoopType::Loop);
                     self.expression(condition)?;
                     self.statement(body)?;
@@ -203,39 +203,39 @@ impl<'a> Resolver<'a> {
                     }
                     self.resolve_local(name, location)?;
                 }
-                Expression::Assignment(name, value_expression) => {
-                    self.expression(value_expression.as_ref())?;
-                    self.resolve_local(&name.item, location)?;
+                Expression::Assignment { variable_name, expression } => {
+                    self.expression(expression.as_ref())?;
+                    self.resolve_local(&variable_name.item, location)?;
                 }
-                Expression::Binary(_, lhs_expression, rhs_expression) => {
+                Expression::Binary { lhs_expression, rhs_expression, .. } => {
                     self.expression(lhs_expression)?;
                     self.expression(rhs_expression)?;
                 }
-                Expression::Call(callee, arguments) => {
+                Expression::Call { callee, arguments } => {
                     self.expression(callee)?;
                     for arg in arguments {
                         self.expression(arg)?;
                     }
                 }
                 Expression::Grouping(expression)
-                | Expression::Unary(_, expression) => {
+                | Expression::Unary { expression, .. } => {
                     self.expression(expression)?;
                 },
-                Expression::Ternary(condition, true_expression, false_expression) => {
+                Expression::Ternary { condition, true_expression, false_expression } => {
                     self.expression(condition)?;
                     self.expression(true_expression)?;
                     self.expression(false_expression)?;
                 },
-                Expression::Lambda(parameters, body) => {
+                Expression::Lambda { parameters, body } => {
                     self.function(Some(parameters), body.as_ref(), FunctionType::Function)?;
                 },
                 Expression::Literal(_) => (),
-                Expression::Get(subexpr, _) => {
-                    self.expression(subexpr)?;
+                Expression::Get { object, .. } => {
+                    self.expression(object)?;
                 }
-                Expression::Set(assignment_expr, _, value_expr) => {
-                    self.expression(assignment_expr)?;
-                    self.expression(value_expr)?;
+                Expression::Set { object, value_expression, .. } => {
+                    self.expression(object)?;
+                    self.expression(value_expression)?;
                 }
                 Expression::This => {
                     if let ClassType::None = self.class_type {
