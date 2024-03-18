@@ -1,4 +1,6 @@
-use std::{borrow::Borrow, collections::HashMap, fmt::Display, rc::Rc, time::SystemTime};
+use std::{
+    borrow::Borrow, cell::RefCell, collections::HashMap, fmt::Display, rc::Rc, time::SystemTime,
+};
 
 use crate::{
     lexer::Token,
@@ -62,6 +64,12 @@ pub enum Error {
     InvalidTernary(Value),
     #[error("This is supposed to be a value, but it was a '{0}'")]
     InvalidLiteral(Token),
+    #[error("Only instances have fields")]
+    GetOnNonObject,
+    #[error("Only instances have fields set")]
+    SetOnNonObject,
+    #[error("Instance doesn't have field '{0}'")]
+    InvalidFieldAccess(String),
 
     #[error("Can't 'break' when not in a loop")]
     InvalidBreak,
@@ -104,6 +112,7 @@ impl<T> MaybeWithSignal<T> {
 pub enum FunctionImplementation {
     Lox(Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
     Clock,
+    DeepCopy,
 }
 
 #[derive(Clone, Debug)]
@@ -160,6 +169,13 @@ impl Function {
                     .expect("Unix epoch is always in the past")
                     .as_secs_f64(),
             )),
+            FunctionImplementation::DeepCopy => Ok(match &args[0] {
+                Value::Instance(instance) => {
+                    let inner_cell = RefCell::borrow(&instance);
+                    Value::Instance(Rc::new(RefCell::new(inner_cell.clone())))
+                }
+                value => value.clone(),
+            }),
         }
     }
 }
@@ -169,6 +185,7 @@ impl Display for FunctionImplementation {
         match match self {
             Self::Lox(_, body) => Ok(format!("fn @ {}", body.location())),
             Self::Clock => Err("clock"),
+            Self::DeepCopy => Err("deepcopy"),
         } {
             Ok(s) => write!(f, "{s}"),
             Err(s) => write!(f, "native fn {s}"),
@@ -179,6 +196,7 @@ impl Display for FunctionImplementation {
 #[derive(Clone, Debug)]
 pub struct Class {
     name: String,
+    methods: HashMap<String, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -195,9 +213,10 @@ impl Callable {
     ) -> ExpressionEvalResult {
         match self {
             Callable::Function(function) => function.call(interpreter, args),
-            Callable::Class(class) => Ok(Value::Instance(Instance {
+            Callable::Class(class) => Ok(Value::Instance(Rc::new(RefCell::new(Instance {
                 class: class.clone(),
-            })),
+                fields: HashMap::new(),
+            })))),
         }
     }
 
@@ -224,6 +243,28 @@ impl TryFrom<Value> for Callable {
 #[derive(Clone, Debug)]
 pub struct Instance {
     class: Rc<Class>,
+    fields: HashMap<String, Value>,
+}
+
+impl Instance {
+    pub fn get(&self, field: &Located<String>) -> ExpressionEvalResult {
+        if let Some(value) = self.fields.get(&field.item).cloned() {
+            return Ok(value);
+        }
+
+        if let Some(method) = self.class.methods.get(&field.item).cloned() {
+            return Ok(method);
+        }
+        
+        Err(Error::InvalidFieldAccess(field.item.clone())
+            .at(&field.location())
+            .no_signal())
+    }
+
+    pub fn set(&mut self, field: &Located<String>, value: Value) -> StatementEvalResult {
+        self.fields.insert(field.item.clone(), value);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -232,7 +273,7 @@ pub enum Value {
     Class(Rc<Class>),
     String(String),
     Number(f64),
-    Instance(Instance),
+    Instance(Rc<RefCell<Instance>>),
     True,
     False,
     Nil,
@@ -277,7 +318,9 @@ impl Display for Value {
             Value::Class(class) => write!(f, "{}", class.name),
             Value::String(string) => write!(f, "\"{string}\""),
             Value::Number(number) => write!(f, "{number}"),
-            Value::Instance(instance) => write!(f, "{} instance", instance.class.name),
+            Value::Instance(instance) => {
+                write!(f, "{} instance", RefCell::borrow(instance).class.name)
+            }
             Value::True => write!(f, "true"),
             Value::False => write!(f, "false"),
             Value::Nil => write!(f, "nil"),
@@ -514,6 +557,8 @@ impl Interpreter {
             globals,
             locals: HashMap::new(),
         };
+
+        // insert native functions into global scope
         this.environment.declare(
             "clock".into(),
             Value::Function(Function {
@@ -521,7 +566,15 @@ impl Interpreter {
                 environment: this.environment.clone(),
                 implementation: FunctionImplementation::Clock,
             }),
-        ); // insert clock native function into global scope
+        );
+        this.environment.declare(
+            "deepcopy".into(),
+            Value::Function(Function {
+                arity: 1,
+                environment: this.environment.clone(),
+                implementation: FunctionImplementation::DeepCopy,
+            }),
+        );
         this
     }
 
@@ -602,9 +655,9 @@ impl Interpreter {
                 let function = self.function_declaration(parameters.clone(), body.clone())?;
                 self.environment.declare(name.clone(), function);
             }
-            Statement::Class(name, functions) => {
+            Statement::Class(name, methods) => {
                 self.environment.declare(name.clone(), Value::Nil);
-                let class = self.class_declaration(name.clone(), functions.clone())?;
+                let class = self.class_declaration(name.clone(), methods)?;
                 self.environment
                     .assign(name.clone(), class)
                     .expect("We just declared the variable in the current scope");
@@ -689,6 +742,12 @@ impl Interpreter {
             Expression::Lambda(parameters, body) => self
                 .function_declaration(parameters.clone(), body.clone())
                 .as_thunk(),
+            Expression::Get(sub_expression, field) => {
+                self.get_expression(sub_expression, field).as_thunk()
+            }
+            Expression::Set(assignment_expression, field, value_expression) => self
+                .set_expression(assignment_expression, field, value_expression)
+                .as_thunk(),
         }
     }
 
@@ -707,9 +766,16 @@ impl Interpreter {
     fn class_declaration(
         &mut self,
         name: String,
-        functions: Rc<Vec<Located<Statement>>>,
+        functions: &Vec<Located<Statement>>,
     ) -> ExpressionEvalResult {
-        Ok(Value::Class(Rc::new(Class { name })))
+        let mut methods = HashMap::new();
+        for method in functions {
+            if let Statement::Function(name, parameters, body) = &method.item {
+                let method = self.function_declaration(parameters.clone(), body.clone())?;
+                methods.insert(name.clone(), method);
+            }
+        }
+        Ok(Value::Class(Rc::new(Class { name, methods })))
     }
 
     fn literal(&mut self, literal: &Located<Token>) -> Result<Value, Token> {
@@ -917,6 +983,32 @@ impl Interpreter {
 
     pub fn resolve(&mut self, location: Location, i: usize) {
         self.locals.insert(location, i);
+    }
+
+    pub fn get_expression(
+        &mut self,
+        sub_expression: &Located<Expression>,
+        field: &Located<String>,
+    ) -> ExpressionEvalResult {
+        let Value::Instance(instance) = self.evaluate(sub_expression)?.into_owned() else {
+            return Err(Error::GetOnNonObject.at(&field.location()).no_signal());
+        };
+        let value = RefCell::borrow(&instance).get(&field)?;
+        Ok(value)
+    }
+
+    pub fn set_expression(
+        &mut self,
+        assignment_expression: &Located<Expression>,
+        field: &Located<String>,
+        value_expression: &Located<Expression>,
+    ) -> ExpressionEvalResult {
+        let Value::Instance(instance) = self.evaluate(assignment_expression)?.into_owned() else {
+            return Err(Error::SetOnNonObject.at(&field.location()).no_signal());
+        };
+        let value = self.evaluate(value_expression)?.into_owned();
+        RefCell::borrow_mut(&instance).set(&field, value.clone())?;
+        Ok(value)
     }
 }
 

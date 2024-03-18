@@ -41,6 +41,7 @@ pub enum Error {
 enum FunctionType {
     None,
     Function,
+    Method,
 }
 
 enum LoopType {
@@ -101,8 +102,13 @@ impl<'a> Resolver<'a> {
                     }
                     self.set_value(name.clone(), VarState::Defined.at(&location));
                 }
-                Statement::Class(name, _) => {
+                Statement::Class(name, methods) => {
                     self.resolve_declaration(name.clone(), location, VarState::Defined)?;
+                    for method in methods.iter() {
+                        if let Statement::Function(_, parameters, body) = &method.item {
+                            self.function(parameters, body, FunctionType::Method)?;
+                        }
+                    }
                 }
                 Statement::Function(name, parameters, body) => {
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
@@ -194,6 +200,13 @@ impl<'a> Resolver<'a> {
                     self.function(parameters, body.as_ref(), FunctionType::Function)?;
                 },
                 Expression::Literal(_) => (),
+                Expression::Get(subexpr, _) => {
+                    self.expression(subexpr)?;
+                }
+                Expression::Set(assignment_expr, _, value_expr) => {
+                    self.expression(assignment_expr)?;
+                    self.expression(value_expr)?;
+                }
             }
         });
         Ok(())

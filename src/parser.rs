@@ -75,6 +75,8 @@ pub enum Error {
     TooManyArguments,
     #[error("Function parameters should be identifiers, not '{0}'")]
     UnexpectedFunctionParameter(Token),
+    #[error("Expected identifier after '.'")]
+    MissingIdentifierInGet,
 }
 
 #[derive(Clone, Debug)]
@@ -95,6 +97,12 @@ pub enum Expression {
         Box<Located<Expression>>,
     ),
     Call(Box<Located<Expression>>, Vec<Located<Expression>>),
+    Get(Box<Located<Expression>>, Located<String>),
+    Set(
+        Box<Located<Expression>>,
+        Located<String>,
+        Box<Located<Expression>>,
+    ),
     Lambda(Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
 }
 
@@ -127,6 +135,16 @@ impl Display for Expression {
                         .join(" ")
                 )
             }
+            Expression::Get(subexpr, field) => {
+                write!(f, "(get {} {})", subexpr.item, field.item)
+            }
+            Expression::Set(instance_expr, field, value_expr) => {
+                write!(
+                    f,
+                    "(set {} {} {})",
+                    instance_expr.item, field.item, value_expr.item
+                )
+            }
             Expression::Lambda(args, body) => {
                 write!(
                     f,
@@ -144,7 +162,7 @@ impl Display for Expression {
 
 #[derive(Clone, Debug)]
 pub enum Statement {
-    Class(String, Rc<Vec<Located<Statement>>>),
+    Class(String, Vec<Located<Statement>>),
     Function(String, Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
     Print(Located<Expression>),
     Expression(Located<Expression>),
@@ -346,6 +364,23 @@ where
         .map(|x| x.location())
     }
 
+    fn consume_identifier(
+        &mut self,
+        error_factory: impl FnOnce(Token) -> Error,
+    ) -> Result<Located<String>, MaybeLocated<Error>> {
+        split_ref_some!(self.tokens.peek() => |token, location| {
+            match token {
+                Token::Identifier(_) => {
+                    let Some((Token::Identifier(name), location)) = self.tokens.next().map(Located::split) else {
+                        unreachable!();
+                    };
+                    Ok(name.at(&location))
+                }
+                _ => Err(error_factory(token.clone()).located_at(location).into())
+            }
+        })
+    }
+
     // parsing fns
     pub fn parse(&mut self) -> Result<Vec<Located<Statement>>, Errors<MaybeLocated<Error>>> {
         let mut statements = Vec::new();
@@ -380,15 +415,11 @@ where
         })
     }
 
-    fn var(&mut self, location: &impl Locateable) -> StatementParseResult {
+    fn var(&mut self, _location: &impl Locateable) -> StatementParseResult {
         self.tokens.next();
-        let Some(Located {
-            item: Token::Identifier(name),
-            ..
-        }) = self.tokens.next()
-        else {
-            return Err(Error::MissingVarIdentifier.located_at(location));
-        };
+        let name = self
+            .consume_identifier(|_| Error::MissingVarIdentifier)?
+            .item;
 
         split_some!(self.tokens.next() => |token, location| {
             match token {
@@ -412,12 +443,7 @@ where
             .is_none()
         {
             loop {
-                let parameter = split_some!(self.tokens.next() => |token, location| {
-                    match token {
-                        Token::Identifier(parameter) => parameter.at(&location),
-                        _ => return Err(Error::UnexpectedFunctionParameter(token).located_at(&location))
-                    }
-                });
+                let parameter = self.consume_identifier(Error::UnexpectedFunctionParameter)?;
                 parameters.push(parameter);
                 split_some!(self.tokens.next() => |token, location| {
                     match token {
@@ -443,13 +469,9 @@ where
     }
 
     fn method(&mut self, location: &impl Locateable) -> StatementParseResult {
-        let Some(Located {
-            item: Token::Identifier(name),
-            ..
-        }) = self.tokens.next()
-        else {
-            return Err(Error::MissingFunctionName.located_at(location));
-        };
+        let name = self
+            .consume_identifier(|_| Error::MissingFunctionName)?
+            .item;
         let parameters = self.function_parameters()?;
         let body = self.statement()?;
         Ok(Statement::Function(name, parameters.into(), body.into()).at(location))
@@ -457,15 +479,9 @@ where
 
     fn class(&mut self, location: &impl Locateable) -> StatementParseResultErrors {
         self.tokens.next();
-        let Some(Located {
-            item: Token::Identifier(name),
-            ..
-        }) = self.tokens.next()
-        else {
-            return Err(Error::MissingClassName.located_at(location).into());
-        };
+        let name = self.consume_identifier(|_| Error::MissingClassName)?.item;
         consume_token!(self, LeftBrace)?;
-        let mut functions = Vec::new();
+        let mut methods = Vec::new();
         let mut errors = Errors::new();
         loop {
             split_ref_some_errors!(self.tokens.peek() => |token, location| {
@@ -482,7 +498,7 @@ where
                     }
                     _ => {
                         match self.method(location) {
-                            Ok(function) => functions.push(function),
+                            Ok(function) => methods.push(function.into()),
                             Err(err) => {
                                 errors.push(err);
                                 self.synchronize();
@@ -492,7 +508,7 @@ where
                 }
             });
         }
-        errors.empty_ok(Statement::Class(name, functions.into()).at(location))
+        errors.empty_ok(Statement::Class(name, methods).at(location))
     }
 
     fn statement(&mut self) -> StatementParseResult {
@@ -694,14 +710,20 @@ where
 
     fn assignment_expression(&mut self, expression: Located<Expression>) -> ExpressionParseResult {
         let (expression, ident_location) = expression.split();
-        let Expression::Variable(name) = expression else {
-            return Err(Error::InvalidAssignmentTarget(expression).located_at(&ident_location));
-        };
-        let rhs_expression = self.assignment()?;
-        Ok(
-            Expression::Assignment(name.at(&ident_location), rhs_expression.into())
-                .at(&ident_location),
-        )
+        match expression {
+            Expression::Variable(name) => {
+                let rhs_expression = self.assignment()?;
+                Ok(
+                    Expression::Assignment(name.at(&ident_location), rhs_expression.into())
+                        .at(&ident_location),
+                )
+            }
+            Expression::Get(sub_expr, field) => {
+                let rhs_expression = self.assignment()?;
+                Ok(Expression::Set(sub_expr, field, rhs_expression.into()).at(&ident_location))
+            }
+            _ => Err(Error::InvalidAssignmentTarget(expression).located_at(&ident_location)),
+        }
     }
 
     fn ternary(&mut self) -> ExpressionParseResult {
@@ -819,32 +841,45 @@ where
 
     fn call(&mut self) -> ExpressionParseResult {
         let mut expr = self.primary()?;
-        let location = expr.location();
-        while let Some(_) = self.tokens.next_if(|t| matches!(t.item, Token::LeftParen)) {
-            let mut args = Vec::new();
-            if self
-                .tokens
-                .next_if(|t| matches!(t.item, Token::RightParen))
-                .is_none()
-            {
-                loop {
-                    args.push(self.expression()?);
-                    split_some!(self.tokens.next() => |token, location| {
-                        match token {
-                            Token::Comma => {
-                                if args.len() >= 255 {
-                                    return Err(Error::TooManyArguments.located_at(&location))
-                                }
-                            },
-                            Token::RightParen => break,
-                            other => {
-                                return Err(Error::UnexpectedArgumentToken(other).located_at(&location))
+        loop {
+            split_ref_some!(self.tokens.peek() => |token, location| {
+                match token {
+                    Token::LeftParen => {
+                        self.tokens.next();
+                        let mut args = Vec::new();
+                        if self
+                            .tokens
+                            .next_if(|t| matches!(t.item, Token::RightParen))
+                            .is_none()
+                        {
+                            loop {
+                                args.push(self.expression()?);
+                                split_some!(self.tokens.next() => |token, location| {
+                                    match token {
+                                        Token::Comma => {
+                                            if args.len() >= 255 {
+                                                return Err(Error::TooManyArguments.located_at(&location))
+                                            }
+                                        },
+                                        Token::RightParen => break,
+                                        other => {
+                                            return Err(Error::UnexpectedArgumentToken(other).located_at(&location))
+                                        }
+                                    }
+                                });
                             }
                         }
-                    });
+                        expr = Expression::Call(Box::new(expr), args).at(location);
+                    }
+                    Token::Dot => {
+                        self.tokens.next();
+                        let field = self.consume_identifier(|_| Error::MissingIdentifierInGet)?;
+                        let expr_location = expr.location();
+                        expr = Expression::Get(expr.into(), field).at(&expr_location)
+                    }
+                    _ => break
                 }
-            }
-            expr = Expression::Call(Box::new(expr), args).at(&location);
+            });
         }
         Ok(expr)
     }

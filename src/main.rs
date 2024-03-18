@@ -224,4 +224,33 @@ print bagel;"#
             .to_string())
         .is_ok());
     }
+
+    #[test]
+    fn fields() {
+        assert!(run(r#"
+class Bagel {}
+var bagel = Bagel();
+bagel.topping = "cream cheese";
+bagel.seed = "poppy";
+
+print "my " + bagel.seed + " seed bagel is topped with " + bagel.topping;
+"#
+        .to_string())
+        .is_ok());
+    }
+
+    #[test]
+    fn methods() {
+        assert!(run(r#"
+class Bacon {
+    eat() {
+        print "Crunch crunch crunch!";
+    }
+}
+
+Bacon().eat();
+"#
+        .to_string())
+        .is_ok())
+    }
 }
