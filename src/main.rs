@@ -271,4 +271,20 @@ cake.taste();
         .to_string())
         .is_ok())
     }
+
+    #[test]
+    fn init() {
+        assert!(run(r#"
+class Foo {
+    init() {
+        print this;
+    }
+}
+
+var foo = Foo();
+print foo.init();
+"#
+        .to_string())
+        .is_ok())
+    }
 }

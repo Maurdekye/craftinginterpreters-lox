@@ -36,17 +36,27 @@ pub enum Error {
     UndefinedVariable(String),
     #[error("Declaration '{0}' is unused")]
     UnusedDeclaration(String),
+    #[error("Can't use 'this' outside of a method call")]
+    ThisFromOutsideMethod,
+    #[error("Can't return a value from inside an initializer")]
+    ReturnInInitializer,
 }
 
 enum FunctionType {
     None,
     Function,
     Method,
+    Initializer,
 }
 
 enum LoopType {
     None,
     Loop,
+}
+
+enum ClassType {
+    None,
+    Class,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -61,6 +71,7 @@ pub struct Resolver<'a> {
     scopes: Vec<HashMap<String, Located<VarState>>>,
     function_type: FunctionType,
     loop_type: LoopType,
+    class_type: ClassType,
 }
 
 type ResolverResult = Result<(), Located<Error>>;
@@ -72,6 +83,7 @@ impl<'a> Resolver<'a> {
             scopes: Vec::new(),
             function_type: FunctionType::None,
             loop_type: LoopType::None,
+            class_type: ClassType::None,
         }
     }
 
@@ -103,15 +115,22 @@ impl<'a> Resolver<'a> {
                     self.set_value(name.clone(), VarState::Defined.at(&location));
                 }
                 Statement::Class(name, methods) => {
+                    let enclosing_class = std::mem::replace(&mut self.class_type, ClassType::Class);
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
                     self.scopes.push(HashMap::new());
                     self.set_value(String::from("this"), VarState::Defined.at(&location));
                     for method in methods.iter() {
-                        if let Statement::Function(_, parameters, body) = &method.item {
-                            self.function(parameters, body, FunctionType::Method)?;
+                        if let Statement::Function(name, parameters, body) = &method.item {
+                            let function_type = if name == "init" { 
+                                FunctionType::Initializer 
+                            } else { 
+                                FunctionType::Method
+                            };
+                            self.function(parameters, body, function_type)?;
                         }
                     }
                     self.pop_scope()?;
+                    self.class_type = enclosing_class;
                 }
                 Statement::Function(name, parameters, body) => {
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
@@ -147,6 +166,9 @@ impl<'a> Resolver<'a> {
                 Statement::Return(expression) => {
                     if let FunctionType::None = self.function_type {
                         return Err(Error::ReturnFromOutsideFunction.at(&location))
+                    }
+                    if let (Some(_), FunctionType::Initializer) = (expression, &self.function_type) {
+                        return Err(Error::ReturnInInitializer.at(&location))
                     }
                     if let Some(expression) = expression {
                         self.expression(expression)?;
@@ -211,6 +233,9 @@ impl<'a> Resolver<'a> {
                     self.expression(value_expr)?;
                 }
                 Expression::This => {
+                    if let ClassType::None = self.class_type {
+                        return Err(Error::ThisFromOutsideMethod.at(&location));
+                    }
                     self.resolve_local(&"this".to_string(), location)?;
                 }
             }

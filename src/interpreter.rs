@@ -119,6 +119,7 @@ pub enum FunctionImplementation {
 pub struct Function {
     arity: usize,
     environment: Environment,
+    is_initializer: bool,
     implementation: FunctionImplementation,
 }
 
@@ -143,13 +144,21 @@ impl Function {
                 }
 
                 // eval function and expect a return value
-                let return_val = match interpreter.statement(body) {
+                let mut return_val = match interpreter.statement(body) {
                     Err(MaybeWithSignal::WithSignal(_, Signal::Return(Some(value)))) => Ok(value),
                     Err(MaybeWithSignal::WithSignal(_, Signal::Return(None))) | Ok(_) => {
                         Ok(Value::Nil)
                     }
                     Err::<(), _>(err) => Err::<Value, _>(err),
                 };
+
+                // return this instead of the normal return value if running an initializer
+                if self.is_initializer {
+                    return_val = Ok(interpreter
+                        .environment
+                        .get(String::from("this"))
+                        .expect("Initializer will always have a 'this' variable declared"));
+                }
 
                 // pop function body's scope
                 interpreter
@@ -213,17 +222,30 @@ impl Callable {
     ) -> ExpressionEvalResult {
         match self {
             Callable::Function(function) => function.call(interpreter, args),
-            Callable::Class(class) => Ok(Value::Instance(Rc::new(RefCell::new(Instance {
-                class: class.clone(),
-                fields: HashMap::new(),
-            })))),
+            Callable::Class(class) => {
+                let instance = Rc::new(RefCell::new(Instance {
+                    class: class.clone(),
+                    fields: HashMap::new(),
+                }));
+                if let Some(Value::Function(init)) = &mut class.methods.get("init").cloned() {
+                    instance.bind(init);
+                    init.call(interpreter, args)?;
+                }
+                Ok(Value::Instance(instance))
+            }
         }
     }
 
     pub fn arity(&self) -> usize {
         match self {
             Callable::Function(function) => function.arity,
-            Callable::Class(_) => 0,
+            Callable::Class(class) => {
+                if let Some(Value::Function(init)) = class.methods.get("init") {
+                    init.arity
+                } else {
+                    0
+                }
+            }
         }
     }
 }
@@ -246,11 +268,12 @@ pub struct Instance {
     fields: HashMap<String, Value>,
 }
 
-pub trait InstanceGet {
+pub trait RcRefCellInstance {
     fn get(&self, field: &Located<String>) -> ExpressionEvalResult;
+    fn bind(&self, method: &mut Function);
 }
 
-impl InstanceGet for Rc<RefCell<Instance>> {
+impl RcRefCellInstance for Rc<RefCell<Instance>> {
     fn get(&self, field: &Located<String>) -> ExpressionEvalResult {
         if let Some(value) = RefCell::borrow(self).fields.get(&field.item).cloned() {
             return Ok(value);
@@ -263,10 +286,7 @@ impl InstanceGet for Rc<RefCell<Instance>> {
             .cloned()
         {
             if let Value::Function(method) = &mut method {
-                method.environment.push();
-                method
-                    .environment
-                    .declare(String::from("this"), Value::Instance(self.clone()));
+                self.bind(method);
             }
             return Ok(method);
         }
@@ -274,6 +294,13 @@ impl InstanceGet for Rc<RefCell<Instance>> {
         Err(Error::InvalidFieldAccess(field.item.clone())
             .at(&field.location())
             .no_signal())
+    }
+
+    fn bind(&self, method: &mut Function) {
+        method.environment.push();
+        method
+            .environment
+            .declare(String::from("this"), Value::Instance(self.clone()));
     }
 }
 
@@ -581,6 +608,7 @@ impl Interpreter {
             Value::Function(Function {
                 arity: 0,
                 environment: this.environment.clone(),
+                is_initializer: false,
                 implementation: FunctionImplementation::Clock,
             }),
         );
@@ -589,6 +617,7 @@ impl Interpreter {
             Value::Function(Function {
                 arity: 1,
                 environment: this.environment.clone(),
+                is_initializer: false,
                 implementation: FunctionImplementation::DeepCopy,
             }),
         );
@@ -669,7 +698,8 @@ impl Interpreter {
                 result?;
             }
             Statement::Function(name, parameters, body) => {
-                let function = self.function_declaration(parameters.clone(), body.clone())?;
+                let function =
+                    self.function_declaration(parameters.clone(), body.clone(), false)?;
                 self.environment.declare(name.clone(), function);
             }
             Statement::Class(name, methods) => {
@@ -757,7 +787,7 @@ impl Interpreter {
                 .with_maybe_signaled_err_at(Error::FunctionCall, location)
                 .as_thunk(),
             Expression::Lambda(parameters, body) => self
-                .function_declaration(parameters.clone(), body.clone())
+                .function_declaration(parameters.clone(), body.clone(), false)
                 .as_thunk(),
             Expression::Get(sub_expression, field) => {
                 self.get_expression(sub_expression, field).as_thunk()
@@ -777,10 +807,12 @@ impl Interpreter {
         &mut self,
         parameters: Rc<Vec<Located<String>>>,
         body: Rc<Located<Statement>>,
+        is_initializer: bool,
     ) -> ExpressionEvalResult {
         Ok(Value::Function(Function {
             arity: parameters.len(),
             environment: self.environment.clone(),
+            is_initializer,
             implementation: FunctionImplementation::Lox(parameters, body), // rc clones, cheap
         }))
     }
@@ -793,7 +825,8 @@ impl Interpreter {
         let mut methods = HashMap::new();
         for method in functions {
             if let Statement::Function(name, parameters, body) = &method.item {
-                let method = self.function_declaration(parameters.clone(), body.clone())?;
+                let method =
+                    self.function_declaration(parameters.clone(), body.clone(), name == "init")?;
                 methods.insert(name.clone(), method);
             }
         }
