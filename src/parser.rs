@@ -104,6 +104,7 @@ pub enum Expression {
         Box<Located<Expression>>,
     ),
     Lambda(Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
+    This,
 }
 
 impl Display for Expression {
@@ -156,6 +157,7 @@ impl Display for Expression {
                     body.item
                 )
             }
+            Expression::This => write!(f, "this"),
         }
     }
 }
@@ -894,6 +896,7 @@ where
             Token::False | Token::True | Token::Nil | Token::Number(_) | Token::String(_) => {
                 Ok(Expression::Literal(next_token).at(&location))
             }
+            Token::This => Ok(Expression::This.at(&location)),
             Token::Identifier(name) => Ok(Expression::Variable(name).at(&location)),
             Token::LeftParen => {
                 let sub_expression = self.expression()?;

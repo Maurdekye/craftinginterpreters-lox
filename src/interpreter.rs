@@ -246,21 +246,38 @@ pub struct Instance {
     fields: HashMap<String, Value>,
 }
 
-impl Instance {
-    pub fn get(&self, field: &Located<String>) -> ExpressionEvalResult {
-        if let Some(value) = self.fields.get(&field.item).cloned() {
+pub trait InstanceGet {
+    fn get(&self, field: &Located<String>) -> ExpressionEvalResult;
+}
+
+impl InstanceGet for Rc<RefCell<Instance>> {
+    fn get(&self, field: &Located<String>) -> ExpressionEvalResult {
+        if let Some(value) = RefCell::borrow(self).fields.get(&field.item).cloned() {
             return Ok(value);
         }
 
-        if let Some(method) = self.class.methods.get(&field.item).cloned() {
+        if let Some(mut method) = RefCell::borrow(self)
+            .class
+            .methods
+            .get(&field.item)
+            .cloned()
+        {
+            if let Value::Function(method) = &mut method {
+                method.environment.push();
+                method
+                    .environment
+                    .declare(String::from("this"), Value::Instance(self.clone()));
+            }
             return Ok(method);
         }
-        
+
         Err(Error::InvalidFieldAccess(field.item.clone())
             .at(&field.location())
             .no_signal())
     }
+}
 
+impl Instance {
     pub fn set(&mut self, field: &Located<String>, value: Value) -> StatementEvalResult {
         self.fields.insert(field.item.clone(), value);
         Ok(())
@@ -748,6 +765,11 @@ impl Interpreter {
             Expression::Set(assignment_expression, field, value_expression) => self
                 .set_expression(assignment_expression, field, value_expression)
                 .as_thunk(),
+            Expression::This => self
+                .variable(String::from("this"), location)
+                .with_err_at(Error::VariableResolution, location)
+                .map_err(MaybeWithSignal::NoSignal)
+                .as_thunk(),
         }
     }
 
@@ -993,7 +1015,7 @@ impl Interpreter {
         let Value::Instance(instance) = self.evaluate(sub_expression)?.into_owned() else {
             return Err(Error::GetOnNonObject.at(&field.location()).no_signal());
         };
-        let value = RefCell::borrow(&instance).get(&field)?;
+        let value = instance.get(&field)?;
         Ok(value)
     }
 

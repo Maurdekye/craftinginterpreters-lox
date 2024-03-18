@@ -253,4 +253,22 @@ Bacon().eat();
         .to_string())
         .is_ok())
     }
+
+    #[test]
+    fn this() {
+        assert!(run(r#"
+class Cake {
+    taste() {
+        var adjective = "delicious";
+        print "The " + this.flavor + " cake is " + adjective + "!";
+    }
+}
+
+var cake = Cake();
+cake.flavor = "German chocolate";
+cake.taste();
+"#
+        .to_string())
+        .is_ok())
+    }
 }

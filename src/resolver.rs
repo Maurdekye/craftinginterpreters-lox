@@ -103,12 +103,15 @@ impl<'a> Resolver<'a> {
                     self.set_value(name.clone(), VarState::Defined.at(&location));
                 }
                 Statement::Class(name, methods) => {
-                    self.resolve_declaration(name.clone(), location, VarState::Defined)?;
+                    self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
+                    self.scopes.push(HashMap::new());
+                    self.set_value(String::from("this"), VarState::Defined.at(&location));
                     for method in methods.iter() {
                         if let Statement::Function(_, parameters, body) = &method.item {
                             self.function(parameters, body, FunctionType::Method)?;
                         }
                     }
+                    self.pop_scope()?;
                 }
                 Statement::Function(name, parameters, body) => {
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
@@ -207,6 +210,9 @@ impl<'a> Resolver<'a> {
                     self.expression(assignment_expr)?;
                     self.expression(value_expr)?;
                 }
+                Expression::This => {
+                    self.resolve_local(&"this".to_string(), location)?;
+                }
             }
         });
         Ok(())
@@ -216,7 +222,7 @@ impl<'a> Resolver<'a> {
         if let Some((name, located)) = self.scopes.pop().and_then(|scope| {
             scope
                 .into_iter()
-                .find(|(_, state)| state.item != VarState::Used)
+                .find(|(name, state)| name != "this" && state.item != VarState::Used)
         }) {
             Err(Error::UnusedDeclaration(name.clone()).at(&located))
         } else {
