@@ -70,6 +70,8 @@ pub enum Error {
     SetOnNonObject,
     #[error("Instance doesn't have field '{0}'")]
     InvalidFieldAccess(String),
+    #[error("'{0}' is not a class")]
+    InvalidSuperclass(String),
 
     #[error("Can't 'break' when not in a loop")]
     InvalidBreak,
@@ -206,8 +208,25 @@ impl Display for FunctionImplementation {
 #[derive(Clone, Debug)]
 pub struct Class {
     name: String,
+    superclass: Option<Rc<Class>>,
     methods: HashMap<String, Value>,
     class_methods: HashMap<String, Value>,
+}
+
+impl Class {
+    pub fn find_method(&self, name: &String) -> Option<Value> {
+        if let Some(method) = self.methods.get(name) {
+            return Some(method.clone());
+        }
+
+        if let Some(superclass) = &self.superclass {
+            if let Some(method) = superclass.find_method(name) {
+                return Some(method);
+            }
+        }
+
+        None
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -281,12 +300,7 @@ impl RcRefCellInstance for Rc<RefCell<Instance>> {
             return Ok(value);
         }
 
-        if let Some(mut method) = RefCell::borrow(self)
-            .class
-            .methods
-            .get(&field.item)
-            .cloned()
-        {
+        if let Some(mut method) = RefCell::borrow(self).class.find_method(&field.item) {
             if let Value::Function(method) = &mut method {
                 self.bind(method);
                 if method.is_getter {
@@ -294,6 +308,7 @@ impl RcRefCellInstance for Rc<RefCell<Instance>> {
                     return Ok(getter_result);
                 }
             }
+
             return Ok(method);
         }
 
@@ -720,11 +735,18 @@ impl Interpreter {
             }
             Statement::Class {
                 name,
+                superclass,
                 methods,
                 class_methods,
             } => {
                 self.environment.declare(name.clone(), Value::Nil);
-                let class = self.class_declaration(name.clone(), methods, class_methods)?;
+                let class = self.class_declaration(
+                    name.clone(),
+                    superclass,
+                    methods,
+                    class_methods,
+                    location,
+                )?;
                 self.environment
                     .assign(name.clone(), class)
                     .expect("We just declared the variable in the current scope");
@@ -857,9 +879,24 @@ impl Interpreter {
     fn class_declaration(
         &mut self,
         name: String,
+        superclass_name: &Option<String>,
         method_definitions: &Vec<Located<Statement>>,
         class_method_definitions: &Vec<Located<Statement>>,
+        location: &Location,
     ) -> ExpressionEvalResult {
+        let superclass = if let Some(superclass_name) = superclass_name {
+            let superclass = self
+                .variable(superclass_name.clone(), location)
+                .map_err(|err| err.at(location).no_signal())?;
+            let Value::Class(superclass) = superclass else {
+                return Err(Error::InvalidSuperclass(superclass_name.clone())
+                    .at(location)
+                    .no_signal());
+            };
+            Some(superclass)
+        } else {
+            None
+        };
         let mut methods = HashMap::new();
         let mut class_methods = HashMap::new();
         for method in method_definitions {
@@ -887,6 +924,7 @@ impl Interpreter {
         }
         Ok(Value::Class(Rc::new(Class {
             name,
+            superclass,
             methods,
             class_methods,
         })))

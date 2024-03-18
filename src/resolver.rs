@@ -40,6 +40,8 @@ pub enum Error {
     ThisFromOutsideMethod,
     #[error("Can't return a value from inside an initializer")]
     ReturnInInitializer,
+    #[error("A class can't be its own superclass!")]
+    SelfReferentialSuperclass,
 }
 
 enum FunctionType {
@@ -114,9 +116,15 @@ impl<'a> Resolver<'a> {
                     }
                     self.set_value(name.clone(), VarState::Defined.at(&location));
                 }
-                Statement::Class { name, methods, class_methods }=> {
+                Statement::Class { name, superclass, methods, class_methods } => {
+                    if Some(name) == superclass.as_ref() {
+                        return Err(Error::SelfReferentialSuperclass.at(&location));
+                    }
                     let enclosing_class = std::mem::replace(&mut self.class_type, ClassType::Class);
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
+                    if let Some(superclass) = superclass {
+                        self.resolve_local(superclass, location.clone())?;
+                    }
                     self.scopes.push(HashMap::new());
                     self.set_value(String::from("this"), VarState::Defined.at(&location));
                     for method in methods.iter() {

@@ -77,6 +77,8 @@ pub enum Error {
     UnexpectedFunctionParameter(Token),
     #[error("Expected identifier after '.'")]
     MissingIdentifierInGet,
+    #[error("Expected superclass name after '<'")]
+    MissingSuperclassName,
 }
 
 #[derive(Clone, Debug)]
@@ -201,6 +203,7 @@ impl Display for Expression {
 pub enum Statement {
     Class {
         name: String,
+        superclass: Option<String>,
         methods: Vec<Located<Statement>>,
         class_methods: Vec<Located<Statement>>,
     },
@@ -235,10 +238,20 @@ impl Display for Statement {
         match self {
             Statement::Class {
                 name,
+                superclass,
                 methods,
                 class_methods,
             } => {
-                writeln!(f, "(class {}", name)?;
+                writeln!(
+                    f,
+                    "(class {}{}",
+                    name,
+                    if let Some(superclass) = superclass {
+                        format!("< {}", superclass)
+                    } else {
+                        String::new()
+                    }
+                )?;
                 for function in methods.iter().chain(class_methods) {
                     writeln!(f, "{}", function.indented(2))?;
                 }
@@ -567,6 +580,14 @@ where
     fn class(&mut self, location: &impl Locateable) -> StatementParseResultErrors {
         self.tokens.next();
         let name = self.consume_identifier(|_| Error::MissingClassName)?.item;
+        let superclass = split_ref_some_errors!(self.tokens.peek() => |token, _location| {
+            if let Token::Less = token {
+                self.tokens.next();
+                Some(self.consume_identifier(|_| Error::MissingSuperclassName)?.item)
+            } else {
+                None
+            }
+        });
         consume_token!(self, LeftBrace)?;
         let mut methods = Vec::new();
         let mut class_methods = Vec::new();
@@ -609,6 +630,7 @@ where
         errors.empty_ok(
             Statement::Class {
                 name,
+                superclass,
                 methods,
                 class_methods,
             }

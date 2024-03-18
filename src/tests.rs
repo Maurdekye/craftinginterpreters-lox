@@ -139,3 +139,20 @@ print circle.area;
     .to_string())
     .is_ok())
 }
+
+#[test]
+fn inheritance() {
+    assert!(run(r#"
+class Doughnut {
+  cook() {
+    print "Fry until golden brown.";
+  }
+}
+
+class BostonCream < Doughnut {}
+
+BostonCream().cook();
+    "#
+    .to_string())
+    .is_ok());
+}
