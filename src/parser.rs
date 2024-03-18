@@ -165,7 +165,11 @@ impl Display for Expression {
 #[derive(Clone, Debug)]
 pub enum Statement {
     Class(String, Vec<Located<Statement>>, Vec<Located<Statement>>),
-    Function(String, Rc<Vec<Located<String>>>, Rc<Located<Statement>>),
+    Function(
+        String,
+        Option<Rc<Vec<Located<String>>>>,
+        Rc<Located<Statement>>,
+    ),
     Print(Located<Expression>),
     Expression(Located<Expression>),
     Var(String, Option<Located<Expression>>),
@@ -184,9 +188,9 @@ pub enum Statement {
 impl Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Statement::Class(name, functions, class_methods) => {
+            Statement::Class(name, methods, class_methods) => {
                 writeln!(f, "(class {}", name)?;
-                for function in functions.iter().chain(class_methods.iter()) {
+                for function in methods.iter().chain(class_methods) {
                     writeln!(f, "{}", function.indented(2))?;
                 }
                 writeln!(f, ")")
@@ -196,10 +200,12 @@ impl Display for Statement {
                     f,
                     "(fun {} ({}) {})",
                     name,
-                    args.iter()
+                    args.as_ref().map(|a| a
+                        .iter()
                         .map(|a| a.item.clone())
                         .collect::<Vec<_>>()
-                        .join(" "),
+                        .join(" "))
+                        .unwrap_or(String::new()),
                     body.item
                 )
             }
@@ -467,16 +473,27 @@ where
 
     fn function(&mut self, location: &impl Locateable) -> StatementParseResult {
         self.tokens.next();
-        self.method(location)
+        self.method(false, location)
     }
 
-    fn method(&mut self, location: &impl Locateable) -> StatementParseResult {
+    fn method(&mut self, allow_getter: bool, location: &impl Locateable) -> StatementParseResult {
         let name = self
             .consume_identifier(|_| Error::MissingFunctionName)?
             .item;
-        let parameters = self.function_parameters()?;
-        let body = self.statement()?;
-        Ok(Statement::Function(name, parameters.into(), body.into()).at(location))
+        split_ref_some!(self.tokens.peek() => |token, params_location| {
+            match token {
+                Token::LeftParen => {
+                    let parameters = self.function_parameters()?;
+                    let body = self.statement()?;
+                    Ok(Statement::Function(name, Some(parameters.into()), body.into()).at(location))
+                }
+                _ if allow_getter => {
+                    let body = self.statement()?;
+                    Ok(Statement::Function(name, None, body.into()).at(location))
+                }
+                token => Err(Error::UnexpectedToken(token.clone()).located_at(params_location))
+            }
+        })
     }
 
     fn class(&mut self, location: &impl Locateable) -> StatementParseResultErrors {
@@ -501,7 +518,7 @@ where
                     }
                     Token::Class => {
                         self.tokens.next();
-                        match self.method(location) {
+                        match self.method(false, location) {
                             Ok(function) => class_methods.push(function.into()),
                             Err(err) => {
                                 errors.push(err);
@@ -510,7 +527,7 @@ where
                         }
                     }
                     _ => {
-                        match self.method(location) {
+                        match self.method(true, location) {
                             Ok(function) => methods.push(function.into()),
                             Err(err) => {
                                 errors.push(err);

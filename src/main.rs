@@ -302,4 +302,24 @@ print Math.square(3);
         .to_string())
         .is_ok())
     }
+
+    #[test]
+    fn getters() {
+        assert!(run(r#"
+class Circle {
+  init(radius) {
+    this.radius = radius;
+  }
+
+  area {
+    return 3.141592653 * this.radius * this.radius;
+  }
+}
+
+var circle = Circle(4);
+print circle.area;
+"#
+        .to_string())
+        .is_ok())
+    }
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use crate::{
     interpreter::Interpreter,
@@ -121,17 +121,17 @@ impl<'a> Resolver<'a> {
                     self.set_value(String::from("this"), VarState::Defined.at(&location));
                     for method in methods.iter() {
                         if let Statement::Function(name, parameters, body) = &method.item {
-                            let function_type = if name == "init" { 
-                                FunctionType::Initializer 
-                            } else { 
+                            let function_type = if name == "init" {
+                                FunctionType::Initializer
+                            } else {
                                 FunctionType::Method
                             };
-                            self.function(parameters, body, function_type)?;
+                            self.function(parameters.as_ref(), body, function_type)?;
                         }
                     }
                     for method in class_methods.iter() {
                         if let Statement::Function(_, parameters, body) = &method.item {
-                            self.function(parameters, body, FunctionType::Function)?;
+                            self.function(parameters.as_ref(), body, FunctionType::Function)?;
                         }
                     }
                     self.pop_scope()?;
@@ -139,7 +139,7 @@ impl<'a> Resolver<'a> {
                 }
                 Statement::Function(name, parameters, body) => {
                     self.resolve_declaration(name.clone(), location.clone(), VarState::Defined)?;
-                    self.function(parameters, body.as_ref(), FunctionType::Function)?;
+                    self.function(parameters.as_ref(), body.as_ref(), FunctionType::Function)?;
                 }
                 Statement::Expression(expression)
                 | Statement::Print(expression) => {
@@ -227,7 +227,7 @@ impl<'a> Resolver<'a> {
                     self.expression(false_expression)?;
                 },
                 Expression::Lambda(parameters, body) => {
-                    self.function(parameters, body.as_ref(), FunctionType::Function)?;
+                    self.function(Some(parameters), body.as_ref(), FunctionType::Function)?;
                 },
                 Expression::Literal(_) => (),
                 Expression::Get(subexpr, _) => {
@@ -262,13 +262,13 @@ impl<'a> Resolver<'a> {
 
     fn function(
         &mut self,
-        parameters: &Vec<Located<String>>,
+        parameters: Option<&Rc<Vec<Located<String>>>>,
         body: &Located<Statement>,
         function_type: FunctionType,
     ) -> ResolverResult {
         let enclosing_type = std::mem::replace(&mut self.function_type, function_type);
         self.scopes.push(HashMap::new());
-        for parameter in parameters.iter() {
+        for parameter in parameters.cloned().unwrap_or_default().iter() {
             self.resolve_declaration(
                 parameter.item.clone(),
                 parameter.location(),

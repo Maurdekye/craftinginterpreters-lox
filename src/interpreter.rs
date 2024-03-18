@@ -120,6 +120,7 @@ pub struct Function {
     arity: usize,
     environment: Environment,
     is_initializer: bool,
+    is_getter: bool,
     implementation: FunctionImplementation,
 }
 
@@ -270,12 +271,12 @@ pub struct Instance {
 }
 
 pub trait RcRefCellInstance {
-    fn get(&self, field: &Located<String>) -> ExpressionEvalResult;
+    fn get(&self, interpreter: &mut Interpreter, field: &Located<String>) -> ExpressionEvalResult;
     fn bind(&self, method: &mut Function);
 }
 
 impl RcRefCellInstance for Rc<RefCell<Instance>> {
-    fn get(&self, field: &Located<String>) -> ExpressionEvalResult {
+    fn get(&self, interpreter: &mut Interpreter, field: &Located<String>) -> ExpressionEvalResult {
         if let Some(value) = RefCell::borrow(self).fields.get(&field.item).cloned() {
             return Ok(value);
         }
@@ -288,6 +289,10 @@ impl RcRefCellInstance for Rc<RefCell<Instance>> {
         {
             if let Value::Function(method) = &mut method {
                 self.bind(method);
+                if method.is_getter {
+                    let getter_result = method.call(interpreter, Vec::new())?;
+                    return Ok(getter_result);
+                }
             }
             return Ok(method);
         }
@@ -610,6 +615,7 @@ impl Interpreter {
                 arity: 0,
                 environment: this.environment.clone(),
                 is_initializer: false,
+                is_getter: false,
                 implementation: FunctionImplementation::Clock,
             }),
         );
@@ -619,6 +625,7 @@ impl Interpreter {
                 arity: 1,
                 environment: this.environment.clone(),
                 is_initializer: false,
+                is_getter: false,
                 implementation: FunctionImplementation::DeepCopy,
             }),
         );
@@ -788,7 +795,7 @@ impl Interpreter {
                 .with_maybe_signaled_err_at(Error::FunctionCall, location)
                 .as_thunk(),
             Expression::Lambda(parameters, body) => self
-                .function_declaration(parameters.clone(), body.clone(), false)
+                .function_declaration(Some(parameters.clone()), body.clone(), false)
                 .as_thunk(),
             Expression::Get(sub_expression, field) => {
                 self.get_expression(sub_expression, field).as_thunk()
@@ -806,15 +813,16 @@ impl Interpreter {
 
     fn function_declaration(
         &mut self,
-        parameters: Rc<Vec<Located<String>>>,
+        parameters: Option<Rc<Vec<Located<String>>>>,
         body: Rc<Located<Statement>>,
         is_initializer: bool,
     ) -> ExpressionEvalResult {
         Ok(Value::Function(Function {
-            arity: parameters.len(),
+            arity: parameters.as_ref().map(|p| p.len()).unwrap_or(0),
             environment: self.environment.clone(),
             is_initializer,
-            implementation: FunctionImplementation::Lox(parameters, body), // rc clones, cheap
+            is_getter: parameters.is_none(),
+            implementation: FunctionImplementation::Lox(parameters.unwrap_or_default(), body), // rc clones, cheap
         }))
     }
 
@@ -1060,7 +1068,7 @@ impl Interpreter {
     ) -> ExpressionEvalResult {
         match self.evaluate(sub_expression)?.into_owned() {
             Value::Instance(instance) => {
-                let value = instance.get(&field)?;
+                let value = instance.get(self, &field)?;
                 Ok(value)
             }
             Value::Class(class) => {
