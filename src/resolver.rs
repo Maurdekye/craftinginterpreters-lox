@@ -40,6 +40,8 @@ pub enum Error {
     ThisFromOutsideMethod,
     #[error("Can't use 'super' outside of a method call")]
     SuperFromOutsideMethod,
+    #[error("Can't use 'super' outside of a method in a subclass")]
+    SuperFromOutsideSubclass,
     #[error("Can't return a value from inside an initializer")]
     ReturnInInitializer,
     #[error("A class can't be its own superclass!")]
@@ -61,6 +63,7 @@ enum LoopType {
 enum ClassType {
     None,
     Class,
+    Subclass,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -128,6 +131,7 @@ impl<'a> Resolver<'a> {
                         self.resolve_local(superclass, location.clone())?;
                     }
                     if superclass.is_some() {
+                        self.class_type = ClassType::Subclass;
                         self.scopes.push(HashMap::new());
                         self.set_value(String::from("super"), VarState::Defined.at(&location));
                     }
@@ -263,6 +267,9 @@ impl<'a> Resolver<'a> {
                 Expression::Super(_) => {
                     if let ClassType::None = self.class_type {
                         return Err(Error::SuperFromOutsideMethod.at(&location));
+                    }
+                    if !matches!(self.class_type, ClassType::Subclass) {
+                        return Err(Error::SuperFromOutsideSubclass.at(&location));
                     }
                     self.resolve_local(&"super".to_owned(), location)?;
                 }
