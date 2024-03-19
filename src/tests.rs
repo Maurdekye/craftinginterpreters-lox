@@ -14,7 +14,7 @@ var a = "global";
   showA();
   print "a: " + a;
 }"#
-    .to_string())
+    .to_owned())
     .is_ok());
 }
 
@@ -28,7 +28,7 @@ class DevonshireCream {
 }
 
 print DevonshireCream;"#
-        .to_string())
+        .to_owned())
     .is_ok());
 }
 
@@ -38,7 +38,7 @@ fn instance() {
 class Bagel {}
 var bagel = Bagel();
 print bagel;"#
-        .to_string())
+        .to_owned())
     .is_ok());
 }
 
@@ -52,7 +52,7 @@ bagel.seed = "poppy";
 
 print "my " + bagel.seed + " seed bagel is topped with " + bagel.topping;
 "#
-    .to_string())
+    .to_owned())
     .is_ok());
 }
 
@@ -67,7 +67,7 @@ class Bacon {
 
 Bacon().eat();
 "#
-    .to_string())
+    .to_owned())
     .is_ok())
 }
 
@@ -85,7 +85,7 @@ var cake = Cake();
 cake.flavor = "German chocolate";
 cake.taste();
 "#
-    .to_string())
+    .to_owned())
     .is_ok())
 }
 
@@ -101,7 +101,7 @@ class Foo {
 var foo = Foo();
 print foo.init();
 "#
-    .to_string())
+    .to_owned())
     .is_ok())
 }
 
@@ -116,7 +116,7 @@ class Math {
 
 print Math.square(3);
 "#
-    .to_string())
+    .to_owned())
     .is_ok())
 }
 
@@ -136,7 +136,7 @@ class Circle {
 var circle = Circle(4);
 print circle.area;
 "#
-    .to_string())
+    .to_owned())
     .is_ok())
 }
 
@@ -153,6 +153,28 @@ class BostonCream < Doughnut {}
 
 BostonCream().cook();
     "#
-    .to_string())
+    .to_owned())
+    .is_ok());
+}
+
+#[test]
+fn super_keyword() {
+    assert!(run(r#"
+class Doughnut {
+  cook() {
+    print "Fry until golden brown.";
+  }
+}
+
+class BostonCream < Doughnut {
+  cook() {
+    super.cook();
+    print "Pipe full of custard and coat with chocolate.";
+  }
+}
+
+BostonCream().cook();
+    "#
+    .to_owned())
     .is_ok());
 }

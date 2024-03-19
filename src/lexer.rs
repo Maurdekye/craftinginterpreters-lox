@@ -378,7 +378,7 @@ impl Iterator for Tokens<'_> {
                     "while" => Token::While,
                     "break" => Token::Break,
                     "continue" => Token::Continue,
-                    ident => Token::Identifier(ident.to_string()),
+                    ident => Token::Identifier(ident.to_owned()),
                 };
                 let result = Some(Ok(identifier.at(self)));
                 self.advance(to_take);

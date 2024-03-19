@@ -38,6 +38,8 @@ pub enum Error {
     UnusedDeclaration(String),
     #[error("Can't use 'this' outside of a method call")]
     ThisFromOutsideMethod,
+    #[error("Can't use 'super' outside of a method call")]
+    SuperFromOutsideMethod,
     #[error("Can't return a value from inside an initializer")]
     ReturnInInitializer,
     #[error("A class can't be its own superclass!")]
@@ -125,6 +127,10 @@ impl<'a> Resolver<'a> {
                     if let Some(superclass) = superclass {
                         self.resolve_local(superclass, location.clone())?;
                     }
+                    if superclass.is_some() {
+                        self.scopes.push(HashMap::new());
+                        self.set_value(String::from("super"), VarState::Defined.at(&location));
+                    }
                     self.scopes.push(HashMap::new());
                     self.set_value(String::from("this"), VarState::Defined.at(&location));
                     for method in methods.iter() {
@@ -143,6 +149,9 @@ impl<'a> Resolver<'a> {
                         }
                     }
                     self.pop_scope()?;
+                    if superclass.is_some() {
+                        self.pop_scope()?;
+                    }
                     self.class_type = enclosing_class;
                 }
                 Statement::Function { name, parameters, body }=> {
@@ -249,7 +258,13 @@ impl<'a> Resolver<'a> {
                     if let ClassType::None = self.class_type {
                         return Err(Error::ThisFromOutsideMethod.at(&location));
                     }
-                    self.resolve_local(&"this".to_string(), location)?;
+                    self.resolve_local(&"this".to_owned(), location)?;
+                }
+                Expression::Super(_) => {
+                    if let ClassType::None = self.class_type {
+                        return Err(Error::SuperFromOutsideMethod.at(&location));
+                    }
+                    self.resolve_local(&"super".to_owned(), location)?;
                 }
             }
         });

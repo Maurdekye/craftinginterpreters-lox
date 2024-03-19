@@ -858,6 +858,7 @@ impl Interpreter {
                 .with_err_at(Error::VariableResolution, location)
                 .map_err(MaybeWithSignal::NoSignal)
                 .as_thunk(),
+            Expression::Super(field) => self.super_expression(field, location.clone()).as_thunk(),
         }
     }
 
@@ -893,6 +894,9 @@ impl Interpreter {
                     .at(location)
                     .no_signal());
             };
+            self.environment.push();
+            self.environment
+                .declare(String::from("super"), Value::Class(superclass.clone()));
             Some(superclass)
         } else {
             None
@@ -921,6 +925,11 @@ impl Interpreter {
                 let method = self.function_declaration(parameters.clone(), body.clone(), false)?;
                 class_methods.insert(name.clone(), method);
             }
+        }
+        if superclass.is_some() {
+            self.environment
+                .pop()
+                .expect("Just pushed a scope for the superclass");
         }
         Ok(Value::Class(Rc::new(Class {
             name,
@@ -1172,6 +1181,32 @@ impl Interpreter {
         RefCell::borrow_mut(&instance).set(&field, value.clone())?;
         Ok(value)
     }
+
+    pub fn super_expression(
+        &mut self,
+        field: &Located<String>,
+        location: Location,
+    ) -> ExpressionEvalResult {
+        let depth = self
+            .locals
+            .get(&location)
+            .expect("superclass is always accessible from super call");
+        let Ok(Value::Class(superclass)) = self.environment.get_at("super".to_owned(), *depth)
+        else {
+            unreachable!("superclass is always accessible from super call");
+        };
+        let Ok(Value::Instance(this)) = self.environment.get_at("this".to_owned(), *depth - 1)
+        else {
+            unreachable!("this is always accessible from super call");
+        };
+        let Some(Value::Function(mut method)) = superclass.find_method(&field.item) else {
+            return Err(Error::InvalidFieldAccess(field.item.clone())
+                .at(&field.location())
+                .no_signal());
+        };
+        this.bind(&mut method);
+        Ok(Value::Function(method))
+    }
 }
 
 #[cfg(test)]
@@ -1181,16 +1216,16 @@ mod tests {
     #[test]
     fn test() {
         let mut env = Environment::new();
-        env.declare("x".to_string(), Value::Number(5.0));
-        env.declare("y".to_string(), Value::Number(10.0));
+        env.declare("x".to_owned(), Value::Number(5.0));
+        env.declare("y".to_owned(), Value::Number(10.0));
         env.push();
-        let _ = env.assign("x".to_string(), Value::Number(40.0));
-        env.declare("z".to_string(), Value::Number(607.0));
+        let _ = env.assign("x".to_owned(), Value::Number(40.0));
+        env.declare("z".to_owned(), Value::Number(607.0));
         dbg!(&env);
-        env.declare("x".to_string(), Value::Number(900.0));
+        env.declare("x".to_owned(), Value::Number(900.0));
         dbg!(&env);
         env.pop().unwrap();
-        let _ = env.assign("x".to_string(), Value::Number(18.0));
+        let _ = env.assign("x".to_owned(), Value::Number(18.0));
         dbg!(&env);
     }
 }

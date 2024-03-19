@@ -79,6 +79,8 @@ pub enum Error {
     MissingIdentifierInGet,
     #[error("Expected superclass name after '<'")]
     MissingSuperclassName,
+    #[error("Expected method name after 'super.'")]
+    MissingMethodNameAfterSuper,
 }
 
 #[derive(Clone, Debug)]
@@ -122,6 +124,7 @@ pub enum Expression {
         body: Rc<Located<Statement>>,
     },
     This,
+    Super(Located<String>),
 }
 
 impl Display for Expression {
@@ -195,6 +198,7 @@ impl Display for Expression {
                 )
             }
             Expression::This => write!(f, "this"),
+            Expression::Super(field) => write!(f, "(super {})", field.item),
         }
     }
 }
@@ -1053,6 +1057,11 @@ where
                 Ok(Expression::Literal(next_token).at(&location))
             }
             Token::This => Ok(Expression::This.at(&location)),
+            Token::Super => {
+                consume_token!(self, Dot)?;
+                let field = self.consume_identifier(|_| Error::MissingMethodNameAfterSuper)?;
+                Ok(Expression::Super(field).at(&location))
+            }
             Token::Identifier(name) => Ok(Expression::Variable(name).at(&location)),
             Token::LeftParen => {
                 let sub_expression = self.expression()?;
