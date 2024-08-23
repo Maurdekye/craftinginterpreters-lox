@@ -178,3 +178,20 @@ BostonCream().cook();
     .to_owned())
     .is_ok());
 }
+
+#[test]
+fn slow_fib() {
+    assert!(run(r#"
+fun fib(n) {
+  if (n < 2) return n;
+  return fib(n - 1) + fib(n - 2); 
+}
+
+var before = clock();
+print fib(40);
+var after = clock();
+print after - before;
+    "#
+    .to_owned())
+    .is_ok());
+}

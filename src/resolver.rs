@@ -85,9 +85,22 @@ type ResolverResult = Result<(), Located<Error>>;
 
 impl<'a> Resolver<'a> {
     pub fn new(interpreter: &'a mut Interpreter) -> Self {
+        let global_idents = interpreter
+            .list_global_idents()
+            .into_iter()
+            .map(|ident| {
+                (
+                    ident,
+                    VarState::Defined.at(&Location {
+                        line: 0,
+                        character: 0,
+                    }),
+                )
+            })
+            .collect();
         Self {
             interpreter,
-            scopes: Vec::new(),
+            scopes: vec![global_idents],
             function_type: FunctionType::None,
             loop_type: LoopType::None,
             class_type: ClassType::None,

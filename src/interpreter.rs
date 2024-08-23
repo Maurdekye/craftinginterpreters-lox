@@ -493,6 +493,10 @@ mod environment {
             Environment(Rc::new(RefCell::new(Scope::new())))
         }
 
+        pub fn list_idents(&self) -> Vec<String> {
+            self.0.borrow().env.keys().cloned().collect()
+        }
+
         pub fn push(&mut self) {
             replace_with_or_abort(&mut self.0, |scope| {
                 let new_scope = Scope {
@@ -644,7 +648,12 @@ impl Interpreter {
                 implementation: FunctionImplementation::DeepCopy,
             }),
         );
+        this.environment.push();
         this
+    }
+
+    pub fn list_global_idents(&self) -> Vec<String> {
+        self.globals.list_idents()
     }
 
     pub fn interpret(
